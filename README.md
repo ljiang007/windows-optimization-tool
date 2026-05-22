@@ -62,6 +62,8 @@ npm run dev
 npm start
 ```
 
+项目脚本会先把 %USERPROFILE%\.cargo\bin 加到当前命令的 PATH，避免新 PowerShell 找不到 cargo。
+
 Tauri CLI 会自动启动：
 
 ```text
@@ -160,3 +162,4 @@ src-tauri/target/
 ```text
 src-tauri/resources/tools/windows-activation/windowsActivation.exe
 ```
+

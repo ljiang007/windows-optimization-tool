@@ -4,13 +4,13 @@
   "description": "系统工具箱 Tauri 轻量桌面端应用",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tauri.ps1 dev",
     "start": "npm run dev",
     "dev:web": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build:web": "vite build",
     "preview": "vite preview",
-    "build": "tauri build",
-    "pack:win": "tauri build"
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tauri.ps1 build",
+    "pack:win": "npm run build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
