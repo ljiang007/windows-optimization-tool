@@ -1,0 +1,25 @@
+{
+  "name": "my-tauri-app",
+  "version": "1.0.0",
+  "description": "系统工具箱 Tauri 轻量桌面端应用",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "start": "npm run dev",
+    "dev:web": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build:web": "vite build",
+    "preview": "vite preview",
+    "build": "tauri build",
+    "pack:win": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "naive-ui": "^2.44.1",
+    "vue": "^3.5.34"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "vite": "^8.0.14"
+  }
+}

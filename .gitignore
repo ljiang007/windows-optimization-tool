@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.vite/
+.DS_Store
+*.log
+
+src-tauri/target/
+src-tauri/gen/
+
+# Keep local-only tools out of GitHub unless they are legally redistributable.
+src-tauri/resources/tools/windows-activation/windowsActivation.exe
