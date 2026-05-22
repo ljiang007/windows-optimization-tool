@@ -20,7 +20,8 @@
         "maxWidth": 540,
         "maxHeight": 960,
         "resizable": false,
-        "center": true
+        "center": true,
+        "devtools": true
       }
     ],
     "security": {
@@ -29,7 +30,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "resources": [
       "resources/tools/**/*"
     ]

@@ -46,6 +46,19 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![open_bundled_tool])
+        .setup(|_app| {
+            #[cfg(debug_assertions)]
+            {
+                // 开发模式自动打开 WebView DevTools，方便查看前端 console 和网络请求。
+                if let Some(window) = _app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+

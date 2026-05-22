@@ -64,6 +64,8 @@ npm start
 
 项目脚本会先把 %USERPROFILE%\.cargo\bin 加到当前命令的 PATH，避免新 PowerShell 找不到 cargo。
 
+开发模式会自动打开 WebView DevTools，前端 console.log 可以在 DevTools Console 中查看。
+
 Tauri CLI 会自动启动：
 
 ```text
@@ -162,4 +164,5 @@ src-tauri/target/
 ```text
 src-tauri/resources/tools/windows-activation/windowsActivation.exe
 ```
+
 
