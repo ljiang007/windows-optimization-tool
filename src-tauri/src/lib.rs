@@ -277,46 +277,34 @@ fn set_high_performance_power_plan() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn toggle_firewall_by_registry() -> Result<String, String> {
-    const FIREWALL_PROFILES: &[(&str, &str)] = &[
-        (
-            "域网络",
-            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
-        ),
-        (
-            "专用网络",
-            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
-        ),
-        (
-            "公用网络",
-            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
-        ),
+fn permanently_disable_firewall_by_registry() -> Result<String, String> {
+    const FIREWALL_PROFILES: &[&str] = &[
+        r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
+        r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
+        r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
     ];
 
-    let enabled_states = FIREWALL_PROFILES
-        .iter()
-        .map(|(_, key)| query_reg_dword(key, "EnableFirewall").map(|value| value != 0))
-        .collect::<Result<Vec<_>, _>>()?;
+    let already_disabled = FIREWALL_PROFILES.iter().all(|key| {
+        query_reg_dword(key, "EnableFirewall")
+            .map(|value| value == 0)
+            .unwrap_or(false)
+    });
 
-    let is_firewall_enabled = enabled_states.iter().any(|enabled| *enabled);
-    let should_enable = !is_firewall_enabled;
-    let next_value = if should_enable { 1 } else { 0 };
+    if already_disabled {
+        return Ok("已是禁用状态，无需重复操作。".to_string());
+    }
 
     let mut script = String::from("@echo off\r\n");
-    for (_, key) in FIREWALL_PROFILES {
+    for key in FIREWALL_PROFILES {
         script.push_str(&format!(
-            r#"reg add "{key}" /v EnableFirewall /t REG_DWORD /d {next_value} /f"#,
+            r#"reg add "{key}" /v EnableFirewall /t REG_DWORD /d 0 /f"#,
         ));
         script.push_str("\r\n");
     }
 
     run_elevated_cmd_script(&script)?;
 
-    if should_enable {
-        Ok("开启Windows防火墙。".to_string())
-    } else {
-        Ok("已关闭Windows防火墙。".to_string())
-    }
+    Ok("已通过注册表彻底禁用 Windows 防火墙。".to_string())
 }
 
 #[tauri::command]
@@ -371,7 +359,7 @@ pub fn run() {
             open_bundled_tool,
             disable_uac_and_file_warning,
             set_high_performance_power_plan,
-            toggle_firewall_by_registry
+            permanently_disable_firewall_by_registry
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]

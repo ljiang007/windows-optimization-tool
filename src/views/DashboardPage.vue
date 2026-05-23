@@ -54,10 +54,10 @@ async function setHighPerformancePowerPlan() {
   }
 }
 
-async function toggleFirewallByRegistry() {
+async function permanentlyDisableFirewallByRegistry() {
   loading.value = true
   try {
-    const result = await invoke('toggle_firewall_by_registry')
+    const result = await invoke('permanently_disable_firewall_by_registry')
     message.success(result)
   } catch (error) {
     message.warning(String(error))
@@ -79,8 +79,8 @@ async function handleToolClick(toolName) {
     return
   }
 
-  if (toolName === '开启/关闭防火墙') {
-    await toggleFirewallByRegistry()
+  if (toolName === '彻底卸载防火墙') {
+    await permanentlyDisableFirewallByRegistry()
     return
   }
 
