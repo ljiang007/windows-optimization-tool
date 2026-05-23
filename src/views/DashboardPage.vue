@@ -25,7 +25,8 @@ function resizeWindowToContent() {
     const width = 540
     const verticalChrome = window.outerHeight - window.innerHeight
     const contentHeight = Math.ceil(content.getBoundingClientRect().height)
-    const targetHeight = Math.max(360, contentHeight + 20 + verticalChrome)
+    const documentHeight = Math.ceil(document.documentElement.scrollHeight)
+    const targetHeight = Math.max(360, contentHeight + documentHeight - window.innerHeight + 36 + verticalChrome)
 
     try {
       await getCurrentWindow().setSize(new LogicalSize(width, targetHeight))
