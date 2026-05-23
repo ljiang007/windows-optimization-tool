@@ -193,7 +193,21 @@ a {
 
 .contact-qq {
   margin-left: auto;
+  padding: 0;
+  border: 0;
   color: #18A058;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.contact-qq:hover {
+  text-decoration: underline;
+}
+
+.contact-qq:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .app-footer nav {

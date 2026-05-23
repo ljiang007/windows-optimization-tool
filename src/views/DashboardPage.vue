@@ -10,7 +10,9 @@ import UtilityToolsPanel from '../components/toolbox/UtilityToolsPanel.vue'
 
 const message = useMessage()
 const version = '1.0.0'
+const qqQrCodeUrl = '/qq-qrcode.png'
 const loading = ref(false)
+const showQqQrCode = ref(false)
 const toolboxWindow = ref(null)
 let resizeObserver
 let resizeFrame = 0
@@ -196,9 +198,17 @@ async function handleToolClick(toolName) {
 
       <footer class="app-footer">
         <span>版本号：{{ version }}</span>
-        <span class="contact-qq">联系QQ</span>
+        <button type="button" class="contact-qq" :disabled="loading" @click="showQqQrCode = true">联系QQ</button>
       </footer>
     </section>
+
+    <div v-if="showQqQrCode" class="qq-modal-backdrop" @click.self="showQqQrCode = false">
+      <div class="qq-modal">
+        <button type="button" class="qq-modal-close" aria-label="关闭" @click="showQqQrCode = false">×</button>
+        <div class="qq-modal-title">联系QQ</div>
+        <img class="qq-qrcode" :src="qqQrCodeUrl" alt="QQ二维码" draggable="false">
+      </div>
+    </div>
 
     <div v-if="loading" class="loading-overlay"></div>
   </main>
@@ -210,5 +220,57 @@ async function handleToolClick(toolName) {
   inset: 0;
   z-index: 9999;
   cursor: not-allowed;
+}
+
+.qq-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  background: rgba(13, 18, 24, 0.34);
+}
+
+.qq-modal {
+  position: relative;
+  width: 236px;
+  padding: 16px 18px 18px;
+  border: 1px solid rgba(174, 183, 193, 0.72);
+  border-radius: 8px;
+  background: #f7f8f7;
+  box-shadow: 0 18px 50px rgba(31, 46, 64, 0.26);
+  text-align: center;
+}
+
+.qq-modal-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  color: #6c7582;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 24px;
+}
+
+.qq-modal-title {
+  margin-bottom: 12px;
+  color: #18202a;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.qq-qrcode {
+  display: block;
+  width: 180px;
+  height: 180px;
+  margin: 0 auto;
+  border: 1px solid #cfd6dd;
+  background: #fff;
+  object-fit: contain;
 }
 </style>
