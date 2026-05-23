@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use tauri::Manager;
 
 struct BundledTool {
     key: &'static str,
