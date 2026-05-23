@@ -10,7 +10,8 @@
     "build:web": "vite build",
     "preview": "vite preview",
     "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tauri.ps1 build",
-    "pack:win": "npm run build"
+    "pack:win": "npm run build",
+    "portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-portable.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

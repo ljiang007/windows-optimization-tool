@@ -33,8 +33,10 @@
     "targets": [
       "nsis"
     ],
-    "resources": [
-      "resources/tools/**/*"
-    ]
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }
