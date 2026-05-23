@@ -4,6 +4,7 @@ const emit = defineEmits(['tool-click'])
 const tools = [
   '软件卸载',
   '安装WinRAR',
+  'YY绿色多开版'
 ]
 </script>
 

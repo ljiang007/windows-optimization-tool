@@ -66,6 +66,18 @@ async function permanentlyDisableFirewallByRegistry() {
   }
 }
 
+async function openYyDownloadPage() {
+  loading.value = true
+  try {
+    const result = await invoke('open_yy_download_page')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
 
@@ -81,6 +93,11 @@ async function handleToolClick(toolName) {
 
   if (toolName === '彻底禁用防火墙') {
     await permanentlyDisableFirewallByRegistry()
+    return
+  }
+
+  if (toolName === 'YY绿色多开版') {
+    await openYyDownloadPage()
     return
   }
 
