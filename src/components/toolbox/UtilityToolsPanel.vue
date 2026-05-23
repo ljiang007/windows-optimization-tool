@@ -30,6 +30,7 @@ const entertainmentTools = [
 
   <section class="tool-panel" aria-labelledby="entertainment-title">
     <div class="panel-title" id="entertainment-title">娱乐类</div>
+    <div class="zhu">注：娱乐类均为网站跳转，都为正规软件无毒无捆绑！</div>
     <div class="tool-grid compact-grid">
       <button
         v-for="tool in entertainmentTools"

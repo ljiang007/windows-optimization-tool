@@ -1,6 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { LogicalSize } from '@tauri-apps/api/dpi'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useMessage } from 'naive-ui'
 import NoticePanel from '../components/toolbox/NoticePanel.vue'
 import SystemOptimizePanel from '../components/toolbox/SystemOptimizePanel.vue'
@@ -9,6 +11,44 @@ import UtilityToolsPanel from '../components/toolbox/UtilityToolsPanel.vue'
 const message = useMessage()
 const version = '1.0.0'
 const loading = ref(false)
+const toolboxWindow = ref(null)
+let resizeObserver
+let resizeFrame = 0
+
+function resizeWindowToContent() {
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
+
+  resizeFrame = requestAnimationFrame(async () => {
+    const content = toolboxWindow.value
+    if (!content) return
+
+    const width = 540
+    const verticalChrome = window.outerHeight - window.innerHeight
+    const contentHeight = Math.ceil(content.getBoundingClientRect().height)
+    const targetHeight = Math.max(360, contentHeight + 20 + verticalChrome)
+
+    try {
+      await getCurrentWindow().setSize(new LogicalSize(width, targetHeight))
+    } catch {
+      // 浏览器预览环境没有 Tauri window API，忽略即可。
+    }
+  })
+}
+
+onMounted(async () => {
+  await nextTick()
+  resizeWindowToContent()
+
+  if (toolboxWindow.value) {
+    resizeObserver = new ResizeObserver(resizeWindowToContent)
+    resizeObserver.observe(toolboxWindow.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
+  resizeObserver?.disconnect()
+})
 
 async function openBundledTool(toolKey) {
   loading.value = true
@@ -130,7 +170,7 @@ async function handleToolClick(toolName) {
 
 <template>
   <main class="toolbox-shell">
-    <section class="toolbox-window" :class="{ 'is-loading': loading }">
+    <section ref="toolboxWindow" class="toolbox-window" :class="{ 'is-loading': loading }">
       <NoticePanel />
       <SystemOptimizePanel @tool-click="handleToolClick" />
       <UtilityToolsPanel @tool-click="handleToolClick" />

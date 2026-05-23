@@ -14,11 +14,10 @@
       {
         "title": "系统工具箱",
         "width": 540,
-        "height": 960,
+        "height": 720,
         "minWidth": 540,
-        "minHeight": 960,
+        "minHeight": 360,
         "maxWidth": 540,
-        "maxHeight": 960,
         "resizable": false,
         "center": true,
         "devtools": true
