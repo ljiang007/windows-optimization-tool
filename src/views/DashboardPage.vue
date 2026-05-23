@@ -25,7 +25,7 @@ async function openBundledTool(toolKey) {
 const toolKeyMap = {
   'Windows激活': 'windowsActivation',
   'Windows更新设置': 'windowsUpdateSettings',
-  'Defender开关': 'defenderSwitch',
+  '彻底关闭实时防护/杀毒功能': 'defenderSwitch',
   '软件卸载': 'softwareUninstall',
   '安装WinRAR': 'installWinrar',
 }
@@ -54,6 +54,18 @@ async function setHighPerformancePowerPlan() {
   }
 }
 
+async function toggleFirewallByRegistry() {
+  loading.value = true
+  try {
+    const result = await invoke('toggle_firewall_by_registry')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
 
@@ -64,6 +76,11 @@ async function handleToolClick(toolName) {
 
   if (toolName === '一键关闭关闭UAC通知/文件安全警告') {
     await disableUacAndFileWarning()
+    return
+  }
+
+  if (toolName === '开启/关闭防火墙') {
+    await toggleFirewallByRegistry()
     return
   }
 

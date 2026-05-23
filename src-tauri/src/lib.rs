@@ -92,7 +92,7 @@ fn run_hidden_command(program: &str, args: &[&str]) -> Result<(), String> {
 }
 
 fn run_elevated_cmd_script(script: &str) -> Result<(), String> {
-    let script_path = std::env::temp_dir().join("system_toolbox_disable_uac.cmd");
+    let script_path = std::env::temp_dir().join("system_toolbox_elevated_task.cmd");
     fs::write(&script_path, script).map_err(|e| format!("创建提权脚本失败：{e}"))?;
 
     let escaped_script_path = script_path.to_string_lossy().replace('\'', "''");
@@ -118,6 +118,38 @@ fn parse_guid(text: &str) -> Option<String> {
                 && token.matches('-').count() == 4
         })
         .map(|token| token.to_string())
+}
+
+fn query_reg_dword(key: &str, value: &str) -> Result<u32, String> {
+    let output = Command::new("reg")
+        .args(["query", key, "/v", value])
+        .creation_flags(0x0800_0000)
+        .output()
+        .map_err(|e| format!("读取注册表失败：{e}"))?;
+
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("读取注册表失败：{key}\\{value}")
+        } else {
+            detail
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let raw_value = stdout
+        .lines()
+        .find(|line| line.contains(value))
+        .and_then(|line| line.split_whitespace().last())
+        .ok_or_else(|| format!("未找到注册表值：{key}\\{value}"))?;
+
+    if let Some(hex) = raw_value.strip_prefix("0x") {
+        u32::from_str_radix(hex, 16).map_err(|e| format!("解析注册表值失败：{e}"))
+    } else {
+        raw_value
+            .parse::<u32>()
+            .map_err(|e| format!("解析注册表值失败：{e}"))
+    }
 }
 
 /// 将嵌入的工具释放到临时目录，返回释放后的路径。
@@ -245,6 +277,49 @@ fn set_high_performance_power_plan() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn toggle_firewall_by_registry() -> Result<String, String> {
+    const FIREWALL_PROFILES: &[(&str, &str)] = &[
+        (
+            "域网络",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
+        ),
+        (
+            "专用网络",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
+        ),
+        (
+            "公用网络",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
+        ),
+    ];
+
+    let enabled_states = FIREWALL_PROFILES
+        .iter()
+        .map(|(_, key)| query_reg_dword(key, "EnableFirewall").map(|value| value != 0))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let is_firewall_enabled = enabled_states.iter().any(|enabled| *enabled);
+    let should_enable = !is_firewall_enabled;
+    let next_value = if should_enable { 1 } else { 0 };
+
+    let mut script = String::from("@echo off\r\n");
+    for (_, key) in FIREWALL_PROFILES {
+        script.push_str(&format!(
+            r#"reg add "{key}" /v EnableFirewall /t REG_DWORD /d {next_value} /f"#,
+        ));
+        script.push_str("\r\n");
+    }
+
+    run_elevated_cmd_script(&script)?;
+
+    if should_enable {
+        Ok("开启Windows防火墙。".to_string())
+    } else {
+        Ok("已关闭Windows防火墙。".to_string())
+    }
+}
+
+#[tauri::command]
 async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<String, String> {
     // 只允许打开白名单里的内置工具，避免前端传入任意本地路径执行。
     let tool = find_bundled_tool(&tool_key).ok_or_else(|| "未配置该工具。".to_string())?;
@@ -295,7 +370,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_bundled_tool,
             disable_uac_and_file_warning,
-            set_high_performance_power_plan
+            set_high_performance_power_plan,
+            toggle_firewall_by_registry
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]
