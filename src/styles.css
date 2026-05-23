@@ -50,6 +50,8 @@ a {
 .toolbox-window {
   position: relative;
   display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 16px;
   width: 100%;
   min-height: calc(100vh - 20px);

@@ -1,20 +1,38 @@
 <script setup>
 const emit = defineEmits(['tool-click'])
 
-const tools = [
+const systemTools = [
   '软件卸载',
   '安装WinRAR',
+]
+
+const entertainmentTools = [
   'YY绿色多开版',
   '汽水音乐',
 ]
 </script>
 
 <template>
-  <section class="tool-panel" aria-labelledby="utility-title">
-    <div class="panel-title" id="utility-title">软件安装类</div>
+  <section class="tool-panel" aria-labelledby="system-software-title">
+    <div class="panel-title" id="system-software-title">系统软件类</div>
     <div class="tool-grid compact-grid">
       <button
-        v-for="tool in tools"
+        v-for="tool in systemTools"
+        :key="tool"
+        class="tool-button"
+        type="button"
+        @click="emit('tool-click', tool)"
+      >
+        {{ tool }}
+      </button>
+    </div>
+  </section>
+
+  <section class="tool-panel" aria-labelledby="entertainment-title">
+    <div class="panel-title" id="entertainment-title">娱乐类</div>
+    <div class="tool-grid compact-grid">
+      <button
+        v-for="tool in entertainmentTools"
         :key="tool"
         class="tool-button"
         type="button"
