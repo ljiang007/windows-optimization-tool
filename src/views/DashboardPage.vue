@@ -196,6 +196,7 @@ async function handleToolClick(toolName) {
 
       <footer class="app-footer">
         <span>版本号：{{ version }}</span>
+        <span class="contact-qq">联系QQ</span>
       </footer>
     </section>
 
