@@ -11,6 +11,7 @@ const systemTools = [
 const entertainmentTools = [
   'YY绿色多开版',
   '汽水音乐',
+  '谷歌浏览器',
 ]
 </script>
 
