@@ -25,8 +25,7 @@ function resizeWindowToContent() {
     const width = 540
     const verticalChrome = window.outerHeight - window.innerHeight
     const contentHeight = Math.ceil(content.getBoundingClientRect().height)
-    const documentHeight = Math.ceil(document.documentElement.scrollHeight)
-    const targetHeight = Math.max(360, contentHeight + documentHeight - window.innerHeight + 36 + verticalChrome)
+    const targetHeight = Math.max(360, contentHeight + 14 + verticalChrome)
 
     try {
       await getCurrentWindow().setSize(new LogicalSize(width, targetHeight))
@@ -133,6 +132,18 @@ async function openQishuiMusicPage() {
   }
 }
 
+async function openGoogleChromePage() {
+  loading.value = true
+  try {
+    const result = await invoke('open_google_chrome_page')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
 
@@ -158,6 +169,11 @@ async function handleToolClick(toolName) {
 
   if (toolName === '汽水音乐') {
     await openQishuiMusicPage()
+    return
+  }
+
+  if (toolName === '谷歌浏览器') {
+    await openGoogleChromePage()
     return
   }
 
