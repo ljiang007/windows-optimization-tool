@@ -9,7 +9,7 @@ const tools = [
 
 <template>
   <section class="tool-panel" aria-labelledby="utility-title">
-    <div class="panel-title" id="utility-title">辅助工具类</div>
+    <div class="panel-title" id="utility-title">软件安装类</div>
     <div class="tool-grid compact-grid">
       <button
         v-for="tool in tools"
