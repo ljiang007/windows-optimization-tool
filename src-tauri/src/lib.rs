@@ -42,15 +42,10 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
     BundledTool {
         key: "defenderSwitch",
         label: "Defender开关",
-        filename: "dControl.exe",
-        bytes: include_bytes!("../resources/tools/defender-switch/dControl.exe"),
-        companions: &[
-            CompanionFile {
-                filename: "dControl.ini",
-                bytes: include_bytes!("../resources/tools/defender-switch/dControl.ini"),
-            },
-        ],
-        wait_for_exit: false,
+        filename: "DefenderRemover_v13.0_Chs.exe",
+        bytes: include_bytes!("../resources/tools/defender-switch/DefenderRemover_v13.0_Chs.exe"),
+        companions: &[],
+        wait_for_exit: true,
     },
     BundledTool {
         key: "softwareUninstall",
@@ -114,6 +109,8 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
 
     let tool_path = extract_tool(tool)?;
 
+    let tool_dir = tool_path.parent().unwrap().to_path_buf();
+
     if wait {
         // 需要等待的工具：最小化主窗口，等工具关闭后恢复。
         if let Some(window) = app.get_webview_window("main") {
@@ -122,7 +119,9 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let status = Command::new(&tool_path).status();
+            let status = Command::new(&tool_path)
+                .current_dir(&tool_dir)
+                .status();
             let _ = tx.send(status);
         });
 
@@ -138,6 +137,7 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
     } else {
         // 不需要等待的工具：直接启动，不最小化。
         Command::new(&tool_path)
+            .current_dir(&tool_dir)
             .spawn()
             .map_err(|e| format!("打开{}失败：{e}", label))?;
     }

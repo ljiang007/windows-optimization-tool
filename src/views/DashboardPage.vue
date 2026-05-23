@@ -64,7 +64,6 @@ async function handleToolClick(toolName) {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.3);
   cursor: not-allowed;
 }
 </style>
