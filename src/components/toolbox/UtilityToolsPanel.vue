@@ -2,11 +2,7 @@
 const emit = defineEmits(['tool-click'])
 
 const tools = [
-  '常用链接',
-  '系统清理',
   '软件卸载',
-  '文件搜索',
-  '安装7zip',
   '安装WinRAR',
 ]
 </script>

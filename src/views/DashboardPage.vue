@@ -10,13 +10,11 @@ const message = useMessage()
 const version = '1.0.0'
 const loading = ref(false)
 
-async function openWindowsActivationTool() {
+async function openBundledTool(toolKey) {
   loading.value = true
   try {
     // Rust 端会等待工具进程关闭后才返回。
-    await invoke('open_bundled_tool', {
-      toolKey: 'windowsActivation',
-    })
+    await invoke('open_bundled_tool', { toolKey })
   } catch (error) {
     message.warning(String(error))
   } finally {
@@ -24,11 +22,20 @@ async function openWindowsActivationTool() {
   }
 }
 
+const toolKeyMap = {
+  'Windows激活': 'windowsActivation',
+  'Windows更新设置': 'windowsUpdateSettings',
+  'Defender开关': 'defenderSwitch',
+  '软件卸载': 'softwareUninstall',
+  '安装WinRAR': 'installWinrar',
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
-  // 不同按钮后续可以在这里分流到不同的 Tauri/Rust 本地能力。
-  if (toolName === 'Windows激活') {
-    await openWindowsActivationTool()
+
+  const toolKey = toolKeyMap[toolName]
+  if (toolKey) {
+    await openBundledTool(toolKey)
     return
   }
 

@@ -3,11 +3,17 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
 
+struct CompanionFile {
+    filename: &'static str,
+    bytes: &'static [u8],
+}
+
 struct BundledTool {
     key: &'static str,
     label: &'static str,
     filename: &'static str,
     bytes: &'static [u8],
+    companions: &'static [CompanionFile],
 }
 
 const BUNDLED_TOOLS: &[BundledTool] = &[
@@ -16,6 +22,45 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         label: "Windows激活",
         filename: "windowsActivation.exe",
         bytes: include_bytes!("../resources/tools/windows-activation/windowsActivation.exe"),
+        companions: &[],
+    },
+    BundledTool {
+        key: "windowsUpdateSettings",
+        label: "Windows更新设置",
+        filename: "Wub_x64.exe",
+        bytes: include_bytes!("../resources/tools/windows-update-settings/Wub_x64.exe"),
+        companions: &[
+            CompanionFile {
+                filename: "Wub.ini",
+                bytes: include_bytes!("../resources/tools/windows-update-settings/Wub.ini"),
+            },
+        ],
+    },
+    BundledTool {
+        key: "defenderSwitch",
+        label: "Defender开关",
+        filename: "dControl.exe",
+        bytes: include_bytes!("../resources/tools/defender-switch/dControl.exe"),
+        companions: &[
+            CompanionFile {
+                filename: "dControl.ini",
+                bytes: include_bytes!("../resources/tools/defender-switch/dControl.ini"),
+            },
+        ],
+    },
+    BundledTool {
+        key: "softwareUninstall",
+        label: "软件卸载",
+        filename: "geek.exe",
+        bytes: include_bytes!("../resources/tools/software-uninstall/geek.exe"),
+        companions: &[],
+    },
+    BundledTool {
+        key: "installWinrar",
+        label: "安装WinRAR",
+        filename: "winrar.exe",
+        bytes: include_bytes!("../resources/tools/winrar/winrar.exe"),
+        companions: &[],
     },
 ];
 
@@ -37,6 +82,20 @@ fn extract_tool(tool: &BundledTool) -> Result<PathBuf, String> {
     if need_write {
         fs::write(&dest, tool.bytes).map_err(|e| format!("释放工具文件失败：{e}"))?;
     }
+
+    // 释放附带文件到同目录
+    for companion in tool.companions {
+        let companion_dest = dir.join(companion.filename);
+        let need = match fs::metadata(&companion_dest) {
+            Ok(meta) => meta.len() != companion.bytes.len() as u64,
+            Err(_) => true,
+        };
+        if need {
+            fs::write(&companion_dest, companion.bytes)
+                .map_err(|e| format!("释放配置文件失败：{e}"))?;
+        }
+    }
+
     Ok(dest)
 }
 
