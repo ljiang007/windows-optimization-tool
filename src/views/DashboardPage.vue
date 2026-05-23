@@ -30,8 +30,42 @@ const toolKeyMap = {
   '安装WinRAR': 'installWinrar',
 }
 
+async function disableUacAndFileWarning() {
+  loading.value = true
+  try {
+    const result = await invoke('disable_uac_and_file_warning')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function setHighPerformancePowerPlan() {
+  loading.value = true
+  try {
+    const result = await invoke('set_high_performance_power_plan')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
+
+  if (toolName === '一键高性能') {
+    await setHighPerformancePowerPlan()
+    return
+  }
+
+  if (toolName === '一键关闭关闭UAC通知/文件安全警告') {
+    await disableUacAndFileWarning()
+    return
+  }
 
   const toolKey = toolKeyMap[toolName]
   if (toolKey) {

@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
@@ -69,6 +70,56 @@ fn find_bundled_tool(tool_key: &str) -> Option<&'static BundledTool> {
     BUNDLED_TOOLS.iter().find(|tool| tool.key == tool_key)
 }
 
+fn run_hidden_command(program: &str, args: &[&str]) -> Result<(), String> {
+    let output = Command::new(program)
+        .args(args)
+        .creation_flags(0x0800_0000)
+        .output()
+        .map_err(|e| format!("启动 {program} 失败：{e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        Err(if detail.is_empty() {
+            format!("{program} 执行失败，退出码：{}", output.status)
+        } else {
+            detail
+        })
+    }
+}
+
+fn run_elevated_cmd_script(script: &str) -> Result<(), String> {
+    let script_path = std::env::temp_dir().join("system_toolbox_disable_uac.cmd");
+    fs::write(&script_path, script).map_err(|e| format!("创建提权脚本失败：{e}"))?;
+
+    let escaped_script_path = script_path.to_string_lossy().replace('\'', "''");
+    let ps_command = format!(
+        "Start-Process -FilePath cmd.exe -ArgumentList '/c \"{escaped_script_path}\"' -Verb RunAs -Wait"
+    );
+
+    let result = run_hidden_command(
+        "powershell",
+        &["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_command],
+    );
+
+    let _ = fs::remove_file(script_path);
+    result.map_err(|e| format!("提权写入失败或已取消 UAC 授权：{e}"))
+}
+
+fn parse_guid(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|token| token.trim_matches(|c: char| !c.is_ascii_hexdigit() && c != '-'))
+        .find(|token| {
+            token.len() == 36
+                && token.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+                && token.matches('-').count() == 4
+        })
+        .map(|token| token.to_string())
+}
+
 /// 将嵌入的工具释放到临时目录，返回释放后的路径。
 fn extract_tool(tool: &BundledTool) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("system_toolbox_tools");
@@ -98,6 +149,99 @@ fn extract_tool(tool: &BundledTool) -> Result<PathBuf, String> {
     }
 
     Ok(dest)
+}
+
+#[tauri::command]
+fn disable_uac_and_file_warning() -> Result<String, String> {
+    let low_risk_types = ".exe;.bat;.cmd;.vbs;.js;.msi;.reg;.ps1;.zip;.rar;.7z";
+    let current_user_cmds = [
+        [
+            "add",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Associations",
+            "/v",
+            "LowRiskFileTypes",
+            "/t",
+            "REG_SZ",
+            "/d",
+            low_risk_types,
+            "/f",
+        ],
+        [
+            "add",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments",
+            "/v",
+            "SaveZoneInformation",
+            "/t",
+            "REG_DWORD",
+            "/d",
+            "1",
+            "/f",
+        ],
+    ];
+
+    let mut failed = Vec::new();
+    for args in current_user_cmds {
+        if let Err(e) = run_hidden_command("reg", &args) {
+            failed.push(e);
+        }
+    }
+
+    let elevated_script = format!(
+        r#"@echo off
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 0 /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v PromptOnSecureDesktop /t REG_DWORD /d 0 /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Associations" /v LowRiskFileTypes /t REG_SZ /d "{low_risk_types}" /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation /t REG_DWORD /d 1 /f
+"#
+    );
+
+    if let Err(e) = run_elevated_cmd_script(&elevated_script) {
+        failed.push(e);
+    }
+
+    if failed.is_empty() {
+        Ok("已关闭UAC通知和文件安全警告。重启电脑生效！".to_string())
+    } else {
+        Err(format!(
+            "部分操作失败：{}。请确认已在弹出的 UAC 窗口中点“是”，并在完成后重启电脑。",
+            failed.join("; ")
+        ))
+    }
+}
+
+#[tauri::command]
+fn set_high_performance_power_plan() -> Result<String, String> {
+    const HIGH_PERFORMANCE_GUID: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
+
+    if run_hidden_command("powercfg", &["/setactive", HIGH_PERFORMANCE_GUID]).is_ok() {
+        return Ok("设置成功。".to_string());
+    }
+
+    let output = Command::new("powercfg")
+        .args(["/duplicatescheme", HIGH_PERFORMANCE_GUID])
+        .creation_flags(0x0800_0000)
+        .output()
+        .map_err(|e| format!("创建高性能电源计划失败：{e}"))?;
+
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "创建高性能电源计划失败，请确认系统支持 powercfg。".to_string()
+        } else {
+            format!("创建高性能电源计划失败：{detail}")
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let duplicated_guid = parse_guid(&stdout).ok_or_else(|| {
+        "已尝试创建高性能电源计划，但无法识别新计划 GUID。请手动检查 powercfg 输出。".to_string()
+    })?;
+
+    run_hidden_command("powercfg", &["/setactive", &duplicated_guid])
+        .map_err(|e| format!("设置高性能电源计划失败：{e}"))?;
+
+    Ok("已创建并启用高性能电源计划。".to_string())
 }
 
 #[tauri::command]
@@ -148,7 +292,11 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_bundled_tool])
+        .invoke_handler(tauri::generate_handler![
+            open_bundled_tool,
+            disable_uac_and_file_warning,
+            set_high_performance_power_plan
+        ])
         .setup(|_app| {
             #[cfg(debug_assertions)]
             {
@@ -163,5 +311,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-
