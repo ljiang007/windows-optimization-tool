@@ -103,8 +103,6 @@ mod win {
 
 /// 检测系统是否已安装 WebView2 Runtime。
 fn is_webview2_installed() -> bool {
-    // TODO: 测试用，测完删除这行
-    return false;
     // 方法1：检查注册表（多个可能的位置）
     let keys = [
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BEF-ED47AE3B01D8}",
