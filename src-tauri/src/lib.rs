@@ -278,33 +278,36 @@ fn set_high_performance_power_plan() -> Result<String, String> {
 
 #[tauri::command]
 fn permanently_disable_firewall_by_registry() -> Result<String, String> {
-    const FIREWALL_PROFILES: &[&str] = &[
+    const FIREWALL_CONFIG_PROFILES: &[&str] = &[
         r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile",
         r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile",
         r"HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile",
     ];
 
-    let already_disabled = FIREWALL_PROFILES.iter().all(|key| {
-        query_reg_dword(key, "EnableFirewall")
-            .map(|value| value == 0)
-            .unwrap_or(false)
-    });
-
-    if already_disabled {
-        return Ok("已是禁用状态，无需重复操作。".to_string());
-    }
+    const FIREWALL_POLICY_PROFILES: &[&str] = &[
+        r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile",
+        r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\StandardProfile",
+        r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\PublicProfile",
+    ];
 
     let mut script = String::from("@echo off\r\n");
-    for key in FIREWALL_PROFILES {
+    for key in FIREWALL_CONFIG_PROFILES {
         script.push_str(&format!(
             r#"reg add "{key}" /v EnableFirewall /t REG_DWORD /d 0 /f"#,
         ));
         script.push_str("\r\n");
     }
+    for key in FIREWALL_POLICY_PROFILES {
+        script.push_str(&format!(
+            r#"reg add "{key}" /v EnableFirewall /t REG_DWORD /d 0 /f"#,
+        ));
+        script.push_str("\r\n");
+    }
+    script.push_str("netsh advfirewall set allprofiles state off\r\n");
 
     run_elevated_cmd_script(&script)?;
 
-    Ok("已通过注册表彻底禁用 Windows 防火墙。".to_string())
+    Ok("已禁用Windows防火墙。".to_string())
 }
 
 #[tauri::command]
