@@ -14,6 +14,7 @@ struct BundledTool {
     filename: &'static str,
     bytes: &'static [u8],
     companions: &'static [CompanionFile],
+    wait_for_exit: bool,
 }
 
 const BUNDLED_TOOLS: &[BundledTool] = &[
@@ -23,6 +24,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         filename: "windowsActivation.exe",
         bytes: include_bytes!("../resources/tools/windows-activation/windowsActivation.exe"),
         companions: &[],
+        wait_for_exit: true,
     },
     BundledTool {
         key: "windowsUpdateSettings",
@@ -35,6 +37,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
                 bytes: include_bytes!("../resources/tools/windows-update-settings/Wub.ini"),
             },
         ],
+        wait_for_exit: true,
     },
     BundledTool {
         key: "defenderSwitch",
@@ -47,6 +50,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
                 bytes: include_bytes!("../resources/tools/defender-switch/dControl.ini"),
             },
         ],
+        wait_for_exit: false,
     },
     BundledTool {
         key: "softwareUninstall",
@@ -54,6 +58,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         filename: "geek.exe",
         bytes: include_bytes!("../resources/tools/software-uninstall/geek.exe"),
         companions: &[],
+        wait_for_exit: true,
     },
     BundledTool {
         key: "installWinrar",
@@ -61,6 +66,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         filename: "winrar.exe",
         bytes: include_bytes!("../resources/tools/winrar/winrar.exe"),
         companions: &[],
+        wait_for_exit: false,
     },
 ];
 
@@ -104,37 +110,39 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
     // 只允许打开白名单里的内置工具，避免前端传入任意本地路径执行。
     let tool = find_bundled_tool(&tool_key).ok_or_else(|| "未配置该工具。".to_string())?;
     let label = tool.label.to_string();
+    let wait = tool.wait_for_exit;
 
     let tool_path = extract_tool(tool)?;
 
-    // 最小化主窗口，让工具窗口不会被遮挡。
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.minimize();
-    }
+    if wait {
+        // 需要等待的工具：最小化主窗口，等工具关闭后恢复。
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.minimize();
+        }
 
-    // 在子线程中等待工具进程关闭，不阻塞 UI 主线程。
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let status = Command::new(&tool_path).status();
-        let _ = tx.send(status);
-    });
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let status = Command::new(&tool_path).status();
+            let _ = tx.send(status);
+        });
 
-    let result = rx
-        .recv()
-        .map_err(|e| format!("任务执行失败：{e}"))?
-        .map_err(|e| format!("打开{}失败：{e}", label))?;
+        let _result = rx
+            .recv()
+            .map_err(|e| format!("任务执行失败：{e}"))?
+            .map_err(|e| format!("打开{}失败：{e}", label))?;
 
-    // 工具关闭后恢复主窗口。
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-
-    if result.success() {
-        Ok(format!("{}已关闭。", label))
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
     } else {
-        Ok(format!("{}已退出。", label))
+        // 不需要等待的工具：直接启动，不最小化。
+        Command::new(&tool_path)
+            .spawn()
+            .map_err(|e| format!("打开{}失败：{e}", label))?;
     }
+
+    Ok(format!("{}已打开。", label))
 }
 
 pub fn run() {
