@@ -9,14 +9,19 @@ const message = useMessage()
 const version = '1.0.0'
 
 async function openWindowsActivationTool() {
+  const loadingMsg = message.loading('正在打开 Windows激活工具...', { duration: 0 })
   try {
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
     // 前端只传工具 key，真正的 exe 路径由 Rust 后端白名单决定。
     const resultMessage = await invoke('open_bundled_tool', {
       toolKey: 'windowsActivation',
     })
-
+    // 确保 loading 至少显示 1 秒
+    await delay(1000)
+    loadingMsg.destroy()
     message.success(resultMessage)
   } catch (error) {
+    loadingMsg.destroy()
     message.warning(String(error))
   }
 }
