@@ -328,6 +328,23 @@ fn open_yy_download_page() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn open_qishui_music_page() -> Result<String, String> {
+    run_hidden_command(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Process 'https://www.qishui.com/'",
+        ],
+    )
+    .map_err(|e| format!("打开汽水音乐页面失败：{e}"))?;
+
+    Ok("已打开汽水音乐页面。".to_string())
+}
+
+#[tauri::command]
 async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<String, String> {
     // 只允许打开白名单里的内置工具，避免前端传入任意本地路径执行。
     let tool = find_bundled_tool(&tool_key).ok_or_else(|| "未配置该工具。".to_string())?;
@@ -380,7 +397,8 @@ pub fn run() {
             disable_uac_and_file_warning,
             set_high_performance_power_plan,
             permanently_disable_firewall_by_registry,
-            open_yy_download_page
+            open_yy_download_page,
+            open_qishui_music_page
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]

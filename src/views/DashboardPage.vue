@@ -78,6 +78,18 @@ async function openYyDownloadPage() {
   }
 }
 
+async function openQishuiMusicPage() {
+  loading.value = true
+  try {
+    const result = await invoke('open_qishui_music_page')
+    message.success(result)
+  } catch (error) {
+    message.warning(String(error))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
 
@@ -98,6 +110,11 @@ async function handleToolClick(toolName) {
 
   if (toolName === 'YY绿色多开版') {
     await openYyDownloadPage()
+    return
+  }
+
+  if (toolName === '汽水音乐') {
+    await openQishuiMusicPage()
     return
   }
 
