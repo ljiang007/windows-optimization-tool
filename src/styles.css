@@ -90,10 +90,6 @@ a {
   letter-spacing: 0.02em;
 }
 
-.notice-panel {
-  min-height: 154px;
-}
-
 .notice-content {
   display: grid;
   gap: 6px;
