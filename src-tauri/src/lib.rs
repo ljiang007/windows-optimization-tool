@@ -9,6 +9,15 @@ struct CompanionFile {
     bytes: &'static [u8],
 }
 
+macro_rules! companion {
+    ($filename:literal, $path:literal) => {
+        CompanionFile {
+            filename: $filename,
+            bytes: include_bytes!($path),
+        }
+    };
+}
+
 struct BundledTool {
     key: &'static str,
     label: &'static str,
@@ -62,6 +71,73 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         filename: "winrar.exe",
         bytes: include_bytes!("../resources/tools/winrar/winrar.exe"),
         companions: &[],
+        wait_for_exit: true,
+    },
+    BundledTool {
+        key: "killWormVirus",
+        label: "杀蠕虫病毒",
+        filename: "杀蠕虫病毒.exe",
+        bytes: include_bytes!("../resources/tools/kill-worm-virus/杀蠕虫病毒.exe"),
+        companions: &[],
+        wait_for_exit: true,
+    },
+    BundledTool {
+        key: "microsoftCommonRuntimeLibraries",
+        label: "微软常用运行库",
+        filename: "微软常用运行库.exe",
+        bytes: include_bytes!(
+            "../resources/tools/microsoft-common-runtime-libraries/微软常用运行库.exe"
+        ),
+        companions: &[],
+        wait_for_exit: true,
+    },
+    BundledTool {
+        key: "fixDx11",
+        label: "修复DX11",
+        filename: "DirectX Repair.exe",
+        bytes: include_bytes!("../resources/tools/fix-dx/DirectX Repair.exe"),
+        companions: &[
+            companion!(
+                "DirectX Repair.exe.config",
+                "../resources/tools/fix-dx/DirectX Repair.exe.config"
+            ),
+            companion!("log.dat", "../resources/tools/fix-dx/log.dat"),
+            companion!("Settings.ini", "../resources/tools/fix-dx/Settings.ini"),
+            companion!("Data/A/x3daudio1_0.dll", "../resources/tools/fix-dx/Data/A/x3daudio1_0.dll"),
+            companion!("Data/A/x3daudio1_1.dll", "../resources/tools/fix-dx/Data/A/x3daudio1_1.dll"),
+            companion!("Data/A/x3daudio1_2.dll", "../resources/tools/fix-dx/Data/A/x3daudio1_2.dll"),
+            companion!("Data/A/X3DAudio1_3.dll", "../resources/tools/fix-dx/Data/A/X3DAudio1_3.dll"),
+            companion!("Data/A/X3DAudio1_4.dll", "../resources/tools/fix-dx/Data/A/X3DAudio1_4.dll"),
+            companion!("Data/A/X3DAudio1_5.dll", "../resources/tools/fix-dx/Data/A/X3DAudio1_5.dll"),
+            companion!("Data/A/X3DAudio1_6.dll", "../resources/tools/fix-dx/Data/A/X3DAudio1_6.dll"),
+            companion!("Data/A/X3DAudio1_7.dll", "../resources/tools/fix-dx/Data/A/X3DAudio1_7.dll"),
+            companion!("Data/A/xactengine2_0.dll", "../resources/tools/fix-dx/Data/A/xactengine2_0.dll"),
+            companion!("Data/A/xactengine2_1.dll", "../resources/tools/fix-dx/Data/A/xactengine2_1.dll"),
+            companion!("Data/A/xactengine2_2.dll", "../resources/tools/fix-dx/Data/A/xactengine2_2.dll"),
+            companion!("Data/A/xactengine2_3.dll", "../resources/tools/fix-dx/Data/A/xactengine2_3.dll"),
+            companion!("Data/A/xactengine2_7.dll", "../resources/tools/fix-dx/Data/A/xactengine2_7.dll"),
+            companion!("Data/A/xinput1_1.dll", "../resources/tools/fix-dx/Data/A/xinput1_1.dll"),
+            companion!("Data/A/xinput1_2.dll", "../resources/tools/fix-dx/Data/A/xinput1_2.dll"),
+            companion!("Data/A/xinput1_3.dll", "../resources/tools/fix-dx/Data/A/xinput1_3.dll"),
+            companion!("Data/A/xinput9_1_0.dll", "../resources/tools/fix-dx/Data/A/xinput9_1_0.dll"),
+            companion!("Data/B/x3daudio1_0.dll", "../resources/tools/fix-dx/Data/B/x3daudio1_0.dll"),
+            companion!("Data/B/x3daudio1_1.dll", "../resources/tools/fix-dx/Data/B/x3daudio1_1.dll"),
+            companion!("Data/B/x3daudio1_2.dll", "../resources/tools/fix-dx/Data/B/x3daudio1_2.dll"),
+            companion!("Data/B/X3DAudio1_3.dll", "../resources/tools/fix-dx/Data/B/X3DAudio1_3.dll"),
+            companion!("Data/B/X3DAudio1_4.dll", "../resources/tools/fix-dx/Data/B/X3DAudio1_4.dll"),
+            companion!("Data/B/X3DAudio1_5.dll", "../resources/tools/fix-dx/Data/B/X3DAudio1_5.dll"),
+            companion!("Data/B/X3DAudio1_6.dll", "../resources/tools/fix-dx/Data/B/X3DAudio1_6.dll"),
+            companion!("Data/B/X3DAudio1_7.dll", "../resources/tools/fix-dx/Data/B/X3DAudio1_7.dll"),
+            companion!("Data/B/xactengine2_0.dll", "../resources/tools/fix-dx/Data/B/xactengine2_0.dll"),
+            companion!("Data/B/xactengine2_1.dll", "../resources/tools/fix-dx/Data/B/xactengine2_1.dll"),
+            companion!("Data/B/xactengine2_2.dll", "../resources/tools/fix-dx/Data/B/xactengine2_2.dll"),
+            companion!("Data/B/xactengine2_3.dll", "../resources/tools/fix-dx/Data/B/xactengine2_3.dll"),
+            companion!("Data/B/xactengine2_7.dll", "../resources/tools/fix-dx/Data/B/xactengine2_7.dll"),
+            companion!("Data/B/xinput1_1.dll", "../resources/tools/fix-dx/Data/B/xinput1_1.dll"),
+            companion!("Data/B/xinput1_2.dll", "../resources/tools/fix-dx/Data/B/xinput1_2.dll"),
+            companion!("Data/B/xinput1_3.dll", "../resources/tools/fix-dx/Data/B/xinput1_3.dll"),
+            companion!("Data/B/xinput9_1_0.dll", "../resources/tools/fix-dx/Data/B/xinput9_1_0.dll"),
+        ],
         wait_for_exit: true,
     },
     BundledTool {
@@ -186,6 +262,9 @@ fn extract_tool(tool: &BundledTool) -> Result<PathBuf, String> {
     // 释放附带文件到同目录
     for companion in tool.companions {
         let companion_dest = dir.join(companion.filename);
+        if let Some(parent) = companion_dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建附带文件目录失败：{e}"))?;
+        }
         let need = match fs::metadata(&companion_dest) {
             Ok(meta) => meta.len() != companion.bytes.len() as u64,
             Err(_) => true,

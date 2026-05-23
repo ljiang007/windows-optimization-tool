@@ -4,6 +4,9 @@ const emit = defineEmits(['tool-click'])
 const systemTools = [
   '软件卸载',
   '安装WinRAR',
+  '杀蠕虫病毒',
+  '微软常用运行库',
+  '修复DX11',
   '技术员一键重装(vip0)',
   '天喵一键重装(1788)',
 ]

@@ -70,6 +70,9 @@ const toolKeyMap = {
   '彻底关闭实时防护/杀毒功能': 'defenderSwitch',
   '软件卸载': 'softwareUninstall',
   '安装WinRAR': 'installWinrar',
+  '杀蠕虫病毒': 'killWormVirus',
+  '微软常用运行库': 'microsoftCommonRuntimeLibraries',
+  '修复DX11': 'fixDx11',
   '技术员一键重装(vip0)': 'technicianReinstall',
   '天喵一键重装(1788)': 'tianmiaoReinstall',
 }
