@@ -79,7 +79,7 @@ async function handleToolClick(toolName) {
     return
   }
 
-  if (toolName === '彻底卸载防火墙') {
+  if (toolName === '彻底禁用防火墙') {
     await permanentlyDisableFirewallByRegistry()
     return
   }
