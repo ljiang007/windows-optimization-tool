@@ -17,12 +17,16 @@
 
 * {
   box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 body {
   min-width: 0;
   min-height: 100vh;
   margin: 0;
+  -webkit-touch-callout: none;
   background:
     radial-gradient(circle at 6% 8%, rgba(0, 77, 255, 0.12), transparent 20rem),
     radial-gradient(circle at 96% 12%, rgba(255, 0, 240, 0.1), transparent 18rem),
