@@ -41,18 +41,41 @@ fn extract_tool(tool: &BundledTool) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn open_bundled_tool(tool_key: String) -> Result<String, String> {
+async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<String, String> {
     // 只允许打开白名单里的内置工具，避免前端传入任意本地路径执行。
     let tool = find_bundled_tool(&tool_key).ok_or_else(|| "未配置该工具。".to_string())?;
+    let label = tool.label.to_string();
 
     let tool_path = extract_tool(tool)?;
 
-    // 用独立进程启动 exe，启动后的窗口行为由外部工具自身决定。
-    Command::new(&tool_path)
-        .spawn()
-        .map_err(|error| format!("打开{}失败：{error}", tool.label))?;
+    // 最小化主窗口，让工具窗口不会被遮挡。
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.minimize();
+    }
 
-    Ok(format!("{}已打开。", tool.label))
+    // 在子线程中等待工具进程关闭，不阻塞 UI 主线程。
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let status = Command::new(&tool_path).status();
+        let _ = tx.send(status);
+    });
+
+    let result = rx
+        .recv()
+        .map_err(|e| format!("任务执行失败：{e}"))?
+        .map_err(|e| format!("打开{}失败：{e}", label))?;
+
+    // 工具关闭后恢复主窗口。
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+
+    if result.success() {
+        Ok(format!("{}已关闭。", label))
+    } else {
+        Ok(format!("{}已退出。", label))
+    }
 }
 
 pub fn run() {

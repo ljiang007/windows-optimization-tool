@@ -1,4 +1,5 @@
 <script setup>
+import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMessage } from 'naive-ui'
 import NoticePanel from '../components/toolbox/NoticePanel.vue'
@@ -7,26 +8,24 @@ import UtilityToolsPanel from '../components/toolbox/UtilityToolsPanel.vue'
 
 const message = useMessage()
 const version = '1.0.0'
+const loading = ref(false)
 
 async function openWindowsActivationTool() {
-  const loadingMsg = message.loading('正在打开 Windows激活工具...', { duration: 0 })
+  loading.value = true
   try {
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
-    // 前端只传工具 key，真正的 exe 路径由 Rust 后端白名单决定。
-    const resultMessage = await invoke('open_bundled_tool', {
+    // Rust 端会等待工具进程关闭后才返回。
+    await invoke('open_bundled_tool', {
       toolKey: 'windowsActivation',
     })
-    // 确保 loading 至少显示 1 秒
-    await delay(1000)
-    loadingMsg.destroy()
-    message.success(resultMessage)
   } catch (error) {
-    loadingMsg.destroy()
     message.warning(String(error))
+  } finally {
+    loading.value = false
   }
 }
 
 async function handleToolClick(toolName) {
+  if (loading.value) return
   // 不同按钮后续可以在这里分流到不同的 Tauri/Rust 本地能力。
   if (toolName === 'Windows激活') {
     await openWindowsActivationTool()
@@ -39,7 +38,7 @@ async function handleToolClick(toolName) {
 
 <template>
   <main class="toolbox-shell">
-    <section class="toolbox-window">
+    <section class="toolbox-window" :class="{ 'is-loading': loading }">
       <NoticePanel />
       <SystemOptimizePanel @tool-click="handleToolClick" />
       <UtilityToolsPanel @tool-click="handleToolClick" />
@@ -48,5 +47,17 @@ async function handleToolClick(toolName) {
         <span>版本号：{{ version }}</span>
       </footer>
     </section>
+
+    <div v-if="loading" class="loading-overlay"></div>
   </main>
 </template>
+
+<style scoped>
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.3);
+  cursor: not-allowed;
+}
+</style>
