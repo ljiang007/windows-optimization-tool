@@ -4,6 +4,8 @@ const emit = defineEmits(['tool-click'])
 const systemTools = [
   '软件卸载',
   '安装WinRAR',
+  '技术员一键重装(vip0)',
+  '天喵一键重装(1788)',
 ]
 
 const entertainmentTools = [
