@@ -14,7 +14,7 @@ const tools = [
 <template>
   <section class="tool-panel" aria-labelledby="system-title">
     <div class="panel-title" id="system-title">系统优化类</div>
-    <div class="zhu">注：最好依次按顺序点击，Defender开关执行完会重启电脑</div>
+    <div class="zhu">注：最好依次按顺序点击，'彻底关闭实时防护/杀毒功能执行完会重启电脑</div>
     <div class="tool-grid">
       <button
         v-for="tool in tools"
