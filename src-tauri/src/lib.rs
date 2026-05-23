@@ -61,7 +61,7 @@ const BUNDLED_TOOLS: &[BundledTool] = &[
         filename: "winrar.exe",
         bytes: include_bytes!("../resources/tools/winrar/winrar.exe"),
         companions: &[],
-        wait_for_exit: false,
+        wait_for_exit: true,
     },
 ];
 
