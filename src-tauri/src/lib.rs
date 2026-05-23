@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
 
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
 struct CompanionFile {
     filename: &'static str,
     bytes: &'static [u8],
@@ -477,6 +479,7 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
         std::thread::spawn(move || {
             let status = Command::new(&tool_path)
                 .current_dir(&tool_dir)
+                .creation_flags(CREATE_NEW_CONSOLE)
                 .status();
             let _ = tx.send(status);
         });
@@ -494,6 +497,7 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
         // 不需要等待的工具：直接启动，不最小化。
         Command::new(&tool_path)
             .current_dir(&tool_dir)
+            .creation_flags(CREATE_NEW_CONSOLE)
             .spawn()
             .map_err(|e| format!("打开{}失败：{e}", label))?;
     }
