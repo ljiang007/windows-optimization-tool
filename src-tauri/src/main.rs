@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+const APP_STARTUP_PASSWORD: &str = "123456";
 const TODESK_LITE_BYTES: &[u8] = include_bytes!("../resources/tools/todesk/ToDesk_Lite.exe");
 
 // Windows 原生 API
@@ -238,6 +239,106 @@ fn install_webview2() -> bool {
     true
 }
 
+fn ps_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn verify_startup_password() -> bool {
+    let title = ps_single_quote("系统工具箱");
+    let prompt = ps_single_quote("请输入启动密码：");
+    let wrong_password = ps_single_quote("密码错误，请重新输入。");
+    let expected_password = ps_single_quote(APP_STARTUP_PASSWORD);
+
+    let script = format!(
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$expectedPassword = '{expected_password}'
+
+while ($true) {{
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = '{title}'
+    $form.StartPosition = 'CenterScreen'
+    $form.Size = New-Object System.Drawing.Size(360, 170)
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = '{prompt}'
+    $label.Location = New-Object System.Drawing.Point(20, 20)
+    $label.Size = New-Object System.Drawing.Size(300, 20)
+
+    $textbox = New-Object System.Windows.Forms.TextBox
+    $textbox.Location = New-Object System.Drawing.Point(20, 50)
+    $textbox.Size = New-Object System.Drawing.Size(300, 23)
+    $textbox.UseSystemPasswordChar = $true
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = '确定'
+    $okButton.Location = New-Object System.Drawing.Point(164, 90)
+    $okButton.Size = New-Object System.Drawing.Size(75, 28)
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = '取消'
+    $cancelButton.Location = New-Object System.Drawing.Point(245, 90)
+    $cancelButton.Size = New-Object System.Drawing.Size(75, 28)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+
+    $form.Controls.Add($label)
+    $form.Controls.Add($textbox)
+    $form.Controls.Add($okButton)
+    $form.Controls.Add($cancelButton)
+    $form.AcceptButton = $okButton
+    $form.CancelButton = $cancelButton
+
+    $result = $form.ShowDialog()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {{
+        exit 1
+    }}
+
+    if ($textbox.Text -eq $expectedPassword) {{
+        exit 0
+    }}
+
+    [System.Windows.Forms.MessageBox]::Show(
+        '{wrong_password}',
+        '{title}',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    ) | Out-Null
+}}
+"#
+    );
+
+    match Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .creation_flags(0x0800_0000)
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(err) => {
+            win::msgbox(
+                "系统工具箱",
+                &format!("启动密码验证失败：{err}"),
+                win::MB_OK | win::MB_ICONERROR,
+            );
+            false
+        }
+    }
+}
+
 fn extract_startup_tool(filename: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("system_toolbox_startup_tools");
     fs::create_dir_all(&dir).map_err(|e| format!("创建启动工具目录失败：{e}"))?;
@@ -297,6 +398,10 @@ fn prompt_and_open_todesk() {
 }
 
 fn main() {
+    if !verify_startup_password() {
+        return;
+    }
+
     if !is_webview2_installed() {
         if !install_webview2() {
             win::msgbox(
