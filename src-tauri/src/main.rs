@@ -53,6 +53,9 @@ mod win {
 
     pub const MB_OK: u32 = 0x0000_0000;
     pub const MB_YESNO: u32 = 0x0000_0004;
+    pub const MB_SYSTEMMODAL: u32 = 0x0000_1000;
+    pub const MB_SETFOREGROUND: u32 = 0x0001_0000;
+    pub const MB_TOPMOST: u32 = 0x0004_0000;
     pub const MB_ICONQUESTION: u32 = 0x0000_0020;
     pub const MB_ICONERROR: u32 = 0x0000_0010;
     pub const MB_ICONWARNING: u32 = 0x0000_0030;
@@ -360,7 +363,11 @@ fn prompt_and_open_todesk() {
     let answer = win::msgbox(
         "系统工具箱",
         "是否打开 ToDesk 受控远程协助？",
-        win::MB_YESNO | win::MB_ICONQUESTION,
+        win::MB_YESNO
+            | win::MB_ICONQUESTION
+            | win::MB_SYSTEMMODAL
+            | win::MB_SETFOREGROUND
+            | win::MB_TOPMOST,
     );
 
     if answer != win::IDYES {
