@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-const APP_STARTUP_PASSWORD: &str = "123456";
+const APP_STARTUP_PASSWORD: &str = "wanzi";
 const TODESK_LITE_BYTES: &[u8] = include_bytes!("../resources/tools/todesk/ToDesk_Lite.exe");
 
 // Windows 原生 API
