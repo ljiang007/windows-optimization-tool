@@ -1,7 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
+
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+const TODESK_LITE_BYTES: &[u8] = include_bytes!("../resources/tools/todesk/ToDesk_Lite.exe");
 
 // Windows 原生 API
 #[cfg(windows)]
@@ -233,6 +238,64 @@ fn install_webview2() -> bool {
     true
 }
 
+fn extract_startup_tool(filename: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("system_toolbox_startup_tools");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建启动工具目录失败：{e}"))?;
+
+    let dest = dir.join(filename);
+    let need_write = match fs::metadata(&dest) {
+        Ok(meta) => meta.len() != bytes.len() as u64,
+        Err(_) => true,
+    };
+
+    if need_write {
+        fs::write(&dest, bytes).map_err(|e| format!("释放启动工具失败：{e}"))?;
+    }
+
+    Ok(dest)
+}
+
+fn prompt_and_open_todesk() {
+    let answer = win::msgbox(
+        "系统工具箱",
+        "是否打开 ToDesk 受控远程协助？",
+        win::MB_YESNO | win::MB_ICONQUESTION,
+    );
+
+    if answer != win::IDYES {
+        return;
+    }
+
+    let tool_path = match extract_startup_tool("ToDesk_Lite.exe", TODESK_LITE_BYTES) {
+        Ok(path) => path,
+        Err(err) => {
+            win::msgbox(
+                "系统工具箱",
+                &format!("ToDesk 准备失败：{err}"),
+                win::MB_OK | win::MB_ICONWARNING,
+            );
+            return;
+        }
+    };
+
+    let tool_dir = match tool_path.parent() {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::temp_dir(),
+    };
+
+    if let Err(err) = Command::new(&tool_path)
+        .current_dir(tool_dir)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+    {
+        win::msgbox(
+            "系统工具箱",
+            &format!("打开 ToDesk 失败：{err}"),
+            win::MB_OK | win::MB_ICONWARNING,
+        );
+    }
+}
+
 fn main() {
     if !is_webview2_installed() {
         if !install_webview2() {
@@ -245,6 +308,8 @@ fn main() {
         }
         // 安装进程已正常结束，直接启动应用
     }
+
+    prompt_and_open_todesk();
 
     system_toolbox_tauri_lib::run()
 }
