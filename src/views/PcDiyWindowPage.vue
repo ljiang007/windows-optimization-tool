@@ -1,6 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { useMessage } from 'naive-ui'
 import { usePriceCrawler } from '../composables/usePriceCrawler'
 
 const parts = ref([
@@ -97,6 +100,7 @@ const pricedCount = computed(() =>
   rows.value.filter((row) => row.bestPrice != null).length,
 )
 
+const message = useMessage()
 const { getRowState, manualCrawl } = usePriceCrawler(parts)
 
 function clearPrices() {
@@ -117,9 +121,48 @@ function resetAll() {
 }
 
 async function clearXianyuSession() {
-  const msg = await invoke('clear_xianyu_session')
-  alert(msg)
+  try {
+    const msg = await invoke('clear_xianyu_session')
+    message.success(msg, { duration: 4000 })
+  } catch (err) {
+    message.error(typeof err === 'string' ? err : (err?.message ?? '清除失败'), { duration: 5000 })
+  }
 }
+
+let unlistenNeedLogin = null
+let unlistenLoginOk = null
+let xianyuLoginWindow = null
+
+onMounted(async () => {
+  unlistenNeedLogin = await listen('xianyu-need-login', () => {
+    if (xianyuLoginWindow) return
+    const loginUrl = `${window.location.origin}/#/xianyu-login`
+    xianyuLoginWindow = new WebviewWindow('xianyu-login', {
+      url: loginUrl,
+      title: '咸鱼扫码登录',
+      width: 420,
+      height: 500,
+      center: true,
+      resizable: true,
+      alwaysOnTop: true,
+    })
+    xianyuLoginWindow.once('tauri://destroyed', () => {
+      xianyuLoginWindow = null
+    })
+  })
+
+  unlistenLoginOk = await listen('xianyu-login-ok', () => {
+    if (xianyuLoginWindow) {
+      xianyuLoginWindow.close()
+      xianyuLoginWindow = null
+    }
+  })
+})
+
+onUnmounted(() => {
+  if (unlistenNeedLogin) unlistenNeedLogin()
+  if (unlistenLoginOk) unlistenLoginOk()
+})
 
 const missingParts = computed(() =>
   rows.value
