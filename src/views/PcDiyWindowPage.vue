@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { usePriceCrawler } from '../composables/usePriceCrawler'
 
 const parts = ref([
@@ -98,6 +99,28 @@ const pricedCount = computed(() =>
 
 const { getRowState, manualCrawl } = usePriceCrawler(parts)
 
+function clearPrices() {
+  parts.value.forEach((part) => {
+    part.taobao = ''
+    part.douyin = ''
+    part.xianyu = ''
+  })
+}
+
+function resetAll() {
+  parts.value.forEach((part) => {
+    part.model = ''
+    part.taobao = ''
+    part.douyin = ''
+    part.xianyu = ''
+  })
+}
+
+async function clearXianyuSession() {
+  const msg = await invoke('clear_xianyu_session')
+  alert(msg)
+}
+
 const missingParts = computed(() =>
   rows.value
     .filter((row) => !row.part.model.trim() || row.bestPrice == null)
@@ -119,8 +142,15 @@ const widestGap = computed(() =>
           <p class="eyebrow">DIY PRICE DESK</p>
           <h1>电脑DIY比价台</h1>
         </div>
-        <div class="platform-badges" aria-label="支持平台">
-          <span v-for="platform in platformFields" :key="platform.key">{{ platform.label }}</span>
+        <div class="header-right">
+          <div class="platform-badges" aria-label="支持平台">
+            <span v-for="platform in platformFields" :key="platform.key">{{ platform.label }}</span>
+          </div>
+          <div class="header-actions">
+            <button class="action-btn clear-btn" title="清除所有价格，保留型号" @click="clearPrices">清除价格</button>
+            <button class="action-btn reset-btn" title="清空全部数据包括型号" @click="resetAll">重置全部</button>
+            <button class="action-btn session-btn" title="清除咸鱼登录态，下次搜索重新登录" @click="clearXianyuSession">清除登录态</button>
+          </div>
         </div>
       </header>
 
@@ -277,12 +307,69 @@ h1 {
   line-height: 1;
 }
 
+.header-right {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  min-width: 0;
+}
+
 .platform-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   min-width: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.clear-btn {
+  border: 1px solid rgba(41, 98, 175, 0.2);
+  color: #1a4a8a;
+  background: rgba(210, 228, 255, 0.7);
+}
+
+.clear-btn:hover {
+  background: rgba(180, 210, 255, 0.9);
+}
+
+.reset-btn {
+  border: 1px solid rgba(180, 50, 30, 0.2);
+  color: #922010;
+  background: rgba(255, 220, 210, 0.7);
+}
+
+.reset-btn:hover {
+  background: rgba(255, 190, 175, 0.9);
+}
+
+.session-btn {
+  border: 1px solid rgba(100, 60, 160, 0.2);
+  color: #4a1a88;
+  background: rgba(225, 210, 255, 0.7);
+}
+
+.session-btn:hover {
+  background: rgba(200, 180, 255, 0.9);
 }
 
 .platform-badges span,

@@ -4,6 +4,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
 
+#[derive(serde::Serialize)]
+struct PriceResult {
+    taobao: Option<f64>,
+    douyin: Option<f64>,
+    xianyu: Option<f64>,
+}
+
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 struct CompanionFile {
@@ -505,6 +512,200 @@ async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<St
     Ok(format!("{}已打开。", label))
 }
 
+fn build_crawler_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+             AppleWebKit/537.36 (KHTML, like Gecko) \
+             Chrome/125.0.0.0 Safari/537.36",
+        )
+        .cookie_store(true)
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败：{e}"))
+}
+
+async fn fetch_taobao(client: &reqwest::Client, keyword: &str) -> Result<f64, String> {
+    let url = format!(
+        "https://s.taobao.com/search?q={}&sort=default&style=list",
+        urlencoding(keyword),
+    );
+    let html = client
+        .get(&url)
+        .header("Accept-Language", "zh-CN,zh;q=0.9")
+        .header("Referer", "https://www.taobao.com/")
+        .send()
+        .await
+        .map_err(|e| format!("淘宝请求失败：{e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("淘宝响应读取失败：{e}"))?;
+    parse_first_price(&html).ok_or_else(|| "淘宝未解析到价格".to_string())
+}
+
+async fn fetch_douyin(client: &reqwest::Client, keyword: &str) -> Result<f64, String> {
+    let url = format!(
+        "https://www.douyin.com/search/{}?type=product",
+        urlencoding(keyword),
+    );
+    let html = client
+        .get(&url)
+        .header("Accept-Language", "zh-CN,zh;q=0.9")
+        .send()
+        .await
+        .map_err(|e| format!("抖音请求失败：{e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("抖音响应读取失败：{e}"))?;
+    parse_first_price(&html).ok_or_else(|| "抖音未解析到价格".to_string())
+}
+
+fn find_python() -> Option<String> {
+    // 先尝试 PATH 里的命令
+    for cmd in &["python", "py", "python3"] {
+        let ok = Command::new(cmd)
+            .arg("--version")
+            .creation_flags(0x0800_0000)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return Some(cmd.to_string());
+        }
+    }
+    // 兜底：扫描 Windows 常见安装路径
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let candidates = [
+        format!(r"{local}\Programs\Python\Python314\python.exe"),
+        format!(r"{local}\Programs\Python\Python313\python.exe"),
+        format!(r"{local}\Programs\Python\Python312\python.exe"),
+        format!(r"{local}\Programs\Python\Python311\python.exe"),
+        format!(r"{local}\Programs\Python\Python310\python.exe"),
+        r"C:\Python314\python.exe".to_string(),
+        r"C:\Python312\python.exe".to_string(),
+        r"C:\Python311\python.exe".to_string(),
+        r"C:\Python310\python.exe".to_string(),
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.clone());
+        }
+    }
+    None
+}
+
+fn extract_xianyu_script() -> Result<PathBuf, String> {
+    static SCRIPT: &[u8] = include_bytes!("../resources/scripts/xianyu_search.py");
+    let dir = std::env::temp_dir().join("system_toolbox_scripts");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建脚本目录失败：{e}"))?;
+    let path = dir.join("xianyu_search.py");
+    fs::write(&path, SCRIPT).map_err(|e| format!("写出爬虫脚本失败：{e}"))?;
+    Ok(path)
+}
+
+async fn fetch_xianyu(_client: &reqwest::Client, keyword: &str) -> Result<f64, String> {
+    let python = find_python().ok_or_else(|| "未找到 Python，请先安装 Python 3.x".to_string())?;
+    let script = extract_xianyu_script()?;
+    let kw = keyword.to_string();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(&python)
+            .arg(&script)
+            .arg(&kw)
+            .creation_flags(0x0800_0000)
+            .output()
+    })
+    .await
+    .map_err(|e| format!("spawn 失败：{e}"))?
+    .map_err(|e| format!("执行脚本失败：{e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("脚本运行错误：{}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last_line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim().starts_with('{'))
+        .unwrap_or("")
+        .trim();
+    let json: serde_json::Value = serde_json::from_str(last_line)
+        .map_err(|_| format!("脚本输出解析失败：{last_line}"))?;
+
+    if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+
+    json.get("xianyu")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| "咸鱼未返回价格".to_string())
+}
+
+/// 从 HTML 文本中用正则提取第一个形如 ¥123.00 / 123.00 的价格数字。
+/// 各平台 HTML 结构不同，后续按需替换为更精确的选择器解析。
+fn parse_first_price(html: &str) -> Option<f64> {
+    let prefixes: &[&str] = &[
+        r#""price":""#,
+        "¥",
+        "price\">",
+    ];
+    for prefix in prefixes {
+        if let Some(start) = html.find(prefix) {
+            let rest = &html[start + prefix.len()..];
+            let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(rest.len());
+            let cap = &rest[..end];
+            if let Ok(v) = cap.parse::<f64>() {
+                if v > 0.0 { return Some(v); }
+            }
+        }
+    }
+    None
+}
+
+fn urlencoding(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+                vec![c]
+            } else {
+                let encoded = format!("%{:02X}", c as u32);
+                encoded.chars().collect()
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn clear_xianyu_session() -> Result<String, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| "无法读取 APPDATA 环境变量".to_string())?;
+    let session_path = std::path::Path::new(&appdata).join("system_toolbox").join("xianyu_session.json");
+    if session_path.exists() {
+        fs::remove_file(&session_path).map_err(|e| format!("删除登录态失败：{e}"))?;
+        Ok("咸鱼登录态已清除，下次搜索将重新登录。".to_string())
+    } else {
+        Ok("暂无保存的登录态。".to_string())
+    }
+}
+
+#[tauri::command]
+async fn crawl_prices(keyword: String) -> Result<PriceResult, String> {
+    if keyword.trim().is_empty() {
+        return Ok(PriceResult { taobao: None, douyin: None, xianyu: None });
+    }
+    let client = build_crawler_client()?;
+    let (tb, dy, xy) = tokio::join!(
+        fetch_taobao(&client, &keyword),
+        fetch_douyin(&client, &keyword),
+        fetch_xianyu(&client, &keyword),
+    );
+    Ok(PriceResult {
+        taobao: tb.ok(),
+        douyin: dy.ok(),
+        xianyu: xy.ok(),
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -515,7 +716,9 @@ pub fn run() {
             permanently_disable_firewall_by_registry,
             open_yy_download_page,
             open_qishui_music_page,
-            open_google_chrome_page
+            open_google_chrome_page,
+            crawl_prices,
+            clear_xianyu_session
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]
