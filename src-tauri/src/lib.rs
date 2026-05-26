@@ -1,8 +1,14 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
-use std::process::Command;
-use tauri::Manager;
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use tauri::{Emitter, Manager};
+
+struct XianyuQrState {
+    qr_b64: Mutex<Option<String>>,
+}
 
 #[derive(serde::Serialize)]
 struct PriceResult {
@@ -602,44 +608,99 @@ fn extract_xianyu_script() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-async fn fetch_xianyu(_client: &reqwest::Client, keyword: &str) -> Result<f64, String> {
+async fn fetch_xianyu(
+    _client: &reqwest::Client,
+    keyword: &str,
+    app: tauri::AppHandle,
+) -> Result<f64, String> {
     let python = find_python().ok_or_else(|| "未找到 Python，请先安装 Python 3.x".to_string())?;
     let script = extract_xianyu_script()?;
     let kw = keyword.to_string();
+    let should_open_login_loading = std::env::var("APPDATA")
+        .ok()
+        .map(|appdata| {
+            !std::path::Path::new(&appdata)
+                .join("system_toolbox")
+                .join("xianyu_session.json")
+                .exists()
+        })
+        .unwrap_or(false);
 
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new(&python)
+    tokio::task::spawn_blocking(move || -> Result<f64, String> {
+        if should_open_login_loading {
+            let _ = app.emit("xianyu-need-login", ());
+        }
+
+        let mut child = Command::new(&python)
             .arg(&script)
             .arg(&kw)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .creation_flags(0x0800_0000)
-            .output()
+            .spawn()
+            .map_err(|e| format!("执行脚本失败：{e}"))?;
+
+        let stdout = child.stdout.take()
+            .ok_or_else(|| "无法获取脚本输出".to_string())?;
+        let reader = BufReader::new(stdout);
+        let mut last_result: Option<Result<f64, String>> = None;
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            let trimmed = line.trim();
+            if !trimmed.starts_with('{') {
+                continue;
+            }
+            let json: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            match json.get("status").and_then(|v| v.as_str()) {
+                Some("need_login") => {
+                    let _ = app.emit("xianyu-need-login", ());
+                }
+                Some("qr_ready") => {
+                    let qr_b64 = json
+                        .get("qr_b64")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !qr_b64.is_empty() {
+                        if let Ok(mut guard) = app.state::<XianyuQrState>().qr_b64.lock() {
+                            *guard = Some(qr_b64.clone());
+                        }
+                        let _ = app.emit("xianyu-qr-ready", qr_b64);
+                    }
+                }
+                Some("login_ok") => {
+                    let _ = app.emit("xianyu-login-ok", ());
+                    if let Ok(mut guard) = app.state::<XianyuQrState>().qr_b64.lock() {
+                        *guard = None;
+                    }
+                }
+                _ => {
+                    if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+                        last_result = Some(Err(err.to_string()));
+                    } else if let Some(price_val) = json.get("xianyu") {
+                        if let Some(price) = price_val.as_f64() {
+                            last_result = Some(Ok(price));
+                        } else {
+                            last_result = Some(Err("咸鱼未返回价格".to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = child.wait();
+        last_result.unwrap_or_else(|| Err("咸鱼未返回价格".to_string()))
     })
     .await
     .map_err(|e| format!("spawn 失败：{e}"))?
-    .map_err(|e| format!("执行脚本失败：{e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("脚本运行错误：{}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let last_line = stdout
-        .lines()
-        .rev()
-        .find(|l| l.trim().starts_with('{'))
-        .unwrap_or("")
-        .trim();
-    let json: serde_json::Value = serde_json::from_str(last_line)
-        .map_err(|_| format!("脚本输出解析失败：{last_line}"))?;
-
-    if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
-
-    json.get("xianyu")
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| "咸鱼未返回价格".to_string())
 }
 
 /// 从 HTML 文本中用正则提取第一个形如 ¥123.00 / 123.00 的价格数字。
@@ -689,7 +750,12 @@ fn clear_xianyu_session() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn crawl_prices(keyword: String) -> Result<PriceResult, String> {
+fn get_xianyu_qr(state: tauri::State<XianyuQrState>) -> Option<String> {
+    state.qr_b64.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn crawl_prices(app: tauri::AppHandle, keyword: String) -> Result<PriceResult, String> {
     if keyword.trim().is_empty() {
         return Ok(PriceResult { taobao: None, douyin: None, xianyu: None });
     }
@@ -697,7 +763,7 @@ async fn crawl_prices(keyword: String) -> Result<PriceResult, String> {
     let (tb, dy, xy) = tokio::join!(
         fetch_taobao(&client, &keyword),
         fetch_douyin(&client, &keyword),
-        fetch_xianyu(&client, &keyword),
+        fetch_xianyu(&client, &keyword, app),
     );
     Ok(PriceResult {
         taobao: tb.ok(),
@@ -708,6 +774,7 @@ async fn crawl_prices(keyword: String) -> Result<PriceResult, String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(XianyuQrState { qr_b64: Mutex::new(None) })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_bundled_tool,
@@ -718,7 +785,8 @@ pub fn run() {
             open_qishui_music_page,
             open_google_chrome_page,
             crawl_prices,
-            clear_xianyu_session
+            clear_xianyu_session,
+            get_xianyu_qr,
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]

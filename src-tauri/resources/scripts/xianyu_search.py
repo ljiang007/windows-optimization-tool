@@ -14,6 +14,7 @@ import sys
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 UA = (
@@ -82,32 +83,115 @@ def _run_search(p, keyword: str, session_file: Path):
 
 
 def _do_login(p, session_file: Path):
-    """弹出可见浏览器，等用户登录咸鱼后保存 session"""
-    print(json.dumps({'status': 'need_login', 'msg': '请在弹出的浏览器中扫码/登录咸鱼，完成后脚本自动继续'}, ensure_ascii=False), flush=True)
+    """直接打开 passport.goofish.com 登录页（qrCodeFirst=true），提取 QR canvas，等待扫码跳转"""
+    import base64
 
-    SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    browser = p.chromium.launch(headless=False, args=['--no-sandbox'])
-    ctx = browser.new_context(user_agent=UA)
+    LOGIN_URL = (
+        'https://passport.goofish.com/mini_login.htm'
+        '?lang=zh_cn&appName=xianyu&appEntrance=web'
+        '&styleType=vertical&qrCodeFirst=true'
+        '&isMobile=false&notLoadSsoView=false&notKeepLogin=false'
+        '&redirect_url=https%3A%2F%2Fwww.goofish.com%2F'
+    )
+
+    # 先通知 Tauri 弹出登录窗口（显示加载中），避免等 Chromium / 页面加载完成才出现窗口
+    print(json.dumps({'status': 'need_login', 'qr_b64': ''}, ensure_ascii=False), flush=True)
+
+    browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+    ctx = browser.new_context(user_agent=UA, viewport={'width': 500, 'height': 600})
     page = ctx.new_page()
     page.add_init_script(STEALTH)
-    page.goto('https://www.goofish.com/', wait_until='domcontentloaded', timeout=20000)
 
-    # 等待「立即登录」按钮消失，即代表用户已完成登录（最多 3 分钟）
     try:
-        page.wait_for_selector('text=立即登录', timeout=10000)
-    except Exception:
-        pass
-    try:
-        page.wait_for_function(
-            "() => !document.body.innerText.includes('立即登录')",
-            timeout=180000,
-        )
+        page.goto(LOGIN_URL, wait_until='domcontentloaded', timeout=20000)
     except Exception:
         pass
 
-    page.wait_for_timeout(2000)
+    # 等待 #qrcode-img canvas 元素出现
+    try:
+        page.wait_for_selector('#qrcode-img canvas', timeout=10000)
+    except Exception:
+        pass
+
+    # 等待 canvas 尺寸正确（QR 码由 API 异步绘制，需等填充完毕）
+    try:
+        page.wait_for_function("""
+            () => {
+                const c = document.querySelector('#qrcode-img canvas');
+                if (!c) return false;
+                return c.width >= 100 && c.height >= 100;
+            }
+        """, timeout=8000)
+    except Exception:
+        pass
+
+    # 提取 QR canvas：优先元素截图，避免 canvas 因跨域 logo 被污染导致 toDataURL 失败
+    qr_b64 = ''
+    try:
+        el = page.query_selector('#qrcode-img canvas')
+        if el:
+            qr_b64 = base64.b64encode(el.screenshot()).decode()
+    except Exception:
+        pass
+
+    # 兜底：截取页面截图
+    if not qr_b64:
+        try:
+            qr_b64 = base64.b64encode(page.screenshot(full_page=False)).decode()
+        except Exception:
+            pass
+
+    if not qr_b64:
+        browser.close()
+        print(json.dumps({'error': '咸鱼登录二维码加载失败，请重试'}, ensure_ascii=False), flush=True)
+        return
+
+    print(json.dumps({'status': 'qr_ready', 'qr_b64': qr_b64}, ensure_ascii=False), flush=True)
+
+    # 等待扫码成功：必须实际访问咸鱼首页验证不再显示「立即登录」，避免游客 cookie 误判
+    login_ok = False
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        try:
+            body_text = ''
+            try:
+                body_text = page.inner_text('body')
+            except Exception:
+                pass
+            maybe_confirmed = (
+                '扫码成功' in body_text
+                or '登录成功' in body_text
+                or '已确认' in body_text
+                or '授权成功' in body_text
+                or 'www.goofish.com' in page.url
+            )
+            if maybe_confirmed:
+                try:
+                    verify_page = ctx.new_page()
+                    verify_page.add_init_script(STEALTH)
+                    verify_page.goto('https://www.goofish.com/', wait_until='domcontentloaded', timeout=15000)
+                    verify_page.wait_for_timeout(1500)
+                    verify_text = verify_page.inner_text('body')
+                    login_ok = '立即登录' not in verify_text
+                    verify_page.close()
+                    if login_ok:
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        page.wait_for_timeout(1000)
+
+    if not login_ok:
+        browser.close()
+        print(json.dumps({'error': '咸鱼扫码登录超时，请重试'}, ensure_ascii=False), flush=True)
+        return
+
+    session_file.parent.mkdir(parents=True, exist_ok=True)
     ctx.storage_state(path=str(session_file))
     browser.close()
+
+    print(json.dumps({'status': 'login_ok'}, ensure_ascii=False), flush=True)
 
 
 def search_xianyu(keyword: str):

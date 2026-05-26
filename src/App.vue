@@ -2,14 +2,17 @@
 import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import DashboardPage from './views/DashboardPage.vue'
 import PcDiyWindowPage from './views/PcDiyWindowPage.vue'
+import XianyuLoginPage from './views/XianyuLoginPage.vue'
 
 const isPcDiyWindow = window.location.hash === '#/pc-diy'
+const isXianyuLogin = window.location.hash === '#/xianyu-login'
 </script>
 
 <template>
-  <NConfigProvider :theme="darkTheme">
+  <NConfigProvider :theme="null">
     <NMessageProvider>
-      <PcDiyWindowPage v-if="isPcDiyWindow" />
+      <XianyuLoginPage v-if="isXianyuLogin" />
+      <PcDiyWindowPage v-else-if="isPcDiyWindow" />
       <DashboardPage v-else />
     </NMessageProvider>
   </NConfigProvider>
