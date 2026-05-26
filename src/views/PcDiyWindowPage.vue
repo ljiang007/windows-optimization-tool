@@ -111,12 +111,13 @@ const loginButtonText = computed(() => {
 const MAX_LOGS = 300
 let lastLoginWarnAt = 0
 
-function addLog(content, type = 'info') {
+function addLog(content, type = 'info', meta = {}) {
   operationLogs.value.push({
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     type,
     content,
+    url: meta.url || '',
   })
   if (operationLogs.value.length > MAX_LOGS) {
     operationLogs.value.splice(0, operationLogs.value.length - MAX_LOGS)
@@ -138,26 +139,49 @@ function handleBackendLog(payload) {
   if (!payload) return
   const type = typeof payload === 'object' ? (payload.type || 'info') : 'info'
   const text = readEventMessage(payload)
-  if (text) addLog(text, type)
-  if (!text && payload.url) {
-    addLog(`商品链接：${payload.url}`, 'link')
+  if (text) {
+    addLog(text, type, { url: payload.url })
+  } else if (payload.url) {
+    addLog(`商品链接：${payload.url}`, 'link', { url: payload.url })
+  }
+}
+
+function stringifyLogPayload(payload) {
+  try {
+    return JSON.stringify(payload, null, 2)
+  } catch (_err) {
+    return String(payload)
+  }
+}
+
+async function openLogUrl(url) {
+  if (!url) return
+  try {
+    await invoke('open_external_url', { url })
+    addLog(`已打开商品链接：${url}`, 'link', { url })
+  } catch (err) {
+    addLog(`打开链接失败：${typeof err === 'string' ? err : (err?.message ?? '未知错误')}`, 'error')
   }
 }
 
 async function refreshXianyuSession(silent = true) {
   try {
     const info = await invoke('get_xianyu_session_info')
+    const loggedIn = Boolean(info?.logged_in ?? info?.loggedIn)
     xianyuSession.value = {
-      loggedIn: Boolean(info?.logged_in ?? info?.loggedIn),
-      username: info?.username || '',
+      loggedIn,
+      username: loggedIn ? (info?.username || '已登录') : '',
     }
     if (!silent) {
       addLog(
         xianyuSession.value.loggedIn
-          ? `登录信息获取成功：${xianyuSession.value.username || '已登录用户'}`
+          ? `登录信息获取成功：${xianyuSession.value.username || '已登录'}`
           : '登录信息获取成功：未登录',
         xianyuSession.value.loggedIn ? 'success' : 'warning',
       )
+      if (info?.profile) {
+        addLog(`登录信息原始返回：${stringifyLogPayload(info.profile)}`, 'info')
+      }
     }
   } catch (err) {
     xianyuSession.value = { loggedIn: false, username: '' }
@@ -265,8 +289,11 @@ onMounted(async () => {
     }
   })
 
-  unlistenLoginOk = await listen('xianyu-login-ok', async () => {
+  unlistenLoginOk = await listen('xianyu-login-ok', async (event) => {
     addLog('扫码成功，登录态已保存', 'success')
+    if (event.payload?.profile) {
+      addLog(`扫码返回用户信息：${stringifyLogPayload(event.payload.profile)}`, 'info')
+    }
     await refreshXianyuSession(false)
   })
 
@@ -429,7 +456,16 @@ const widestGap = computed(() =>
         <p v-if="operationLogs.length === 0" class="log-empty">暂无操作日志</p>
         <p v-for="item in operationLogs" :key="item.id" class="log-line" :class="`log-${item.type}`">
           <span class="log-time">[{{ item.time }}]</span>
-          <span class="log-text">{{ item.content }}</span>
+          <button
+            v-if="item.url"
+            class="log-text log-link-button"
+            type="button"
+            :title="item.url"
+            @click="openLogUrl(item.url)"
+          >
+            {{ item.content }}
+          </button>
+          <span v-else class="log-text">{{ item.content }}</span>
         </p>
       </div>
     </aside>
@@ -923,6 +959,20 @@ h1 {
 
 .log-text {
   color: #f4f7fb;
+}
+
+.log-link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.log-link-button:hover {
+  text-decoration: underline;
 }
 
 .log-success .log-text {
