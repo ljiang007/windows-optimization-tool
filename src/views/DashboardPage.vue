@@ -174,7 +174,7 @@ async function openPcDiyWindow() {
     }
 
     const pcDiyWindow = new WebviewWindow('pc-diy', {
-      title: '电脑DIY比价台',
+      title: '电脑DIY',
       url: pageUrl,
       width: 1280,
       height: 900,

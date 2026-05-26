@@ -7,21 +7,19 @@ import { useMessage } from 'naive-ui'
 import { usePriceCrawler } from '../composables/usePriceCrawler'
 
 const parts = ref([
-  { key: 'cpu', label: 'CPU', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'motherboard', label: '主板', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'memory', label: '内存条', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'ssd', label: '固态硬盘', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'gpu', label: '显卡', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'cooler', label: '散热', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'psu', label: '电源', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'case', label: '机箱', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'fan', label: '风扇', model: '', taobao: '', douyin: '', xianyu: '' },
-  { key: 'monitor', label: '显示器', model: '', taobao: '', douyin: '', xianyu: '' },
+  { key: 'cpu', label: 'CPU', model: '', xianyu: '' },
+  { key: 'motherboard', label: '主板', model: '', xianyu: '' },
+  { key: 'memory', label: '内存条', model: '', xianyu: '' },
+  { key: 'ssd', label: '固态硬盘', model: '', xianyu: '' },
+  { key: 'gpu', label: '显卡', model: '', xianyu: '' },
+  { key: 'cooler', label: '散热', model: '', xianyu: '' },
+  { key: 'psu', label: '电源', model: '', xianyu: '' },
+  { key: 'case', label: '机箱', model: '', xianyu: '' },
+  { key: 'fan', label: '风扇', model: '', xianyu: '' },
+  { key: 'monitor', label: '显示器', model: '', xianyu: '' },
 ])
 
 const platformFields = [
-  { key: 'taobao', label: '淘宝' },
-  { key: 'douyin', label: '抖音' },
   { key: 'xianyu', label: '咸鱼' },
 ]
 
@@ -105,8 +103,6 @@ const { getRowState, manualCrawl } = usePriceCrawler(parts)
 
 function clearPrices() {
   parts.value.forEach((part) => {
-    part.taobao = ''
-    part.douyin = ''
     part.xianyu = ''
   })
 }
@@ -114,8 +110,6 @@ function clearPrices() {
 function resetAll() {
   parts.value.forEach((part) => {
     part.model = ''
-    part.taobao = ''
-    part.douyin = ''
     part.xianyu = ''
   })
 }
@@ -183,7 +177,7 @@ const widestGap = computed(() =>
       <header class="worktop-bar">
         <div class="title-block">
           <p class="eyebrow">DIY PRICE DESK</p>
-          <h1>电脑DIY比价台</h1>
+          <h1>电脑DIY</h1>
         </div>
         <div class="header-right">
           <div class="platform-badges" aria-label="支持平台">
@@ -231,8 +225,6 @@ const widestGap = computed(() =>
               <tr>
                 <th>配件</th>
                 <th>型号 / 搜索关键词</th>
-                <th>淘宝</th>
-                <th>抖音</th>
                 <th>咸鱼</th>
                 <th>最低价</th>
                 <th>来源</th>
@@ -284,7 +276,7 @@ const widestGap = computed(() =>
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="5">总价</td>
+                <td colspan="3">总价</td>
                 <td class="price-highlight">{{ formatPrice(totalPrice) }}</td>
                 <td>最低价累计</td>
                 <td>{{ widestGap ? formatPrice(widestGap.spread) : '--' }}</td>
@@ -520,32 +512,28 @@ h1 {
 
 .price-table th:nth-child(1),
 .price-table td:nth-child(1) {
-  width: 9%;
+  width: 10%;
 }
 
 .price-table th:nth-child(2),
 .price-table td:nth-child(2) {
-  width: 31%;
+  width: 40%;
 }
 
 .price-table th:nth-child(3),
-.price-table td:nth-child(3),
-.price-table th:nth-child(4),
-.price-table td:nth-child(4),
-.price-table th:nth-child(5),
-.price-table td:nth-child(5) {
-  width: 10%;
+.price-table td:nth-child(3) {
+  width: 16%;
 }
 
+.price-table th:nth-child(4),
+.price-table td:nth-child(4) {
+  width: 14%;
+}
+
+.price-table th:nth-child(5),
+.price-table td:nth-child(5),
 .price-table th:nth-child(6),
 .price-table td:nth-child(6) {
-  width: 11%;
-}
-
-.price-table th:nth-child(7),
-.price-table td:nth-child(7),
-.price-table th:nth-child(8),
-.price-table td:nth-child(8) {
   width: 10%;
 }
 
