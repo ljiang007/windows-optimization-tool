@@ -19,7 +19,7 @@ function createRowState() {
  *
  * 传入 parts（ref 数组），为每一行监听 model 字段变化。
  * 防抖 800ms 后调用 Tauri 后端 crawl_prices 指令，
- * 结果自动回写 part.taobao / part.douyin / part.xianyu。
+ * 结果自动回写 part.xianyu。
  *
  * @param {import('vue').Ref<Array>} parts - PcDiyWindowPage 的 parts ref
  * @returns {{ getRowState: (key: string) => { loading: Ref<boolean>, error: Ref<string|null> }, manualCrawl: (part: object) => void }}
@@ -32,13 +32,11 @@ export function usePriceCrawler(parts) {
 
   /**
    * 实际发起爬取，调用 Rust 后端指令 crawl_prices
-   * 期望后端返回: { taobao: number|null, douyin: number|null, xianyu: number|null }
+   * 期望后端返回: { xianyu: number|null }
    */
   async function fetchPrices(part) {
     const state = stateMap[part.key]
     if (!part.model) {
-      part.taobao = ''
-      part.douyin = ''
       part.xianyu = ''
       state.error.value = null
       return
@@ -49,8 +47,6 @@ export function usePriceCrawler(parts) {
 
     try {
       const result = await invoke('crawl_prices', { keyword: part.model })
-      part.taobao = result.taobao != null ? String(result.taobao) : ''
-      part.douyin = result.douyin != null ? String(result.douyin) : ''
       part.xianyu = result.xianyu != null ? String(result.xianyu) : ''
     }
     catch (err) {
