@@ -15,6 +15,19 @@ struct PriceResult {
     taobao: Option<f64>,
     douyin: Option<f64>,
     xianyu: Option<f64>,
+    xianyu_url: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct XianyuSessionInfo {
+    logged_in: bool,
+    username: Option<String>,
+}
+
+#[derive(Default)]
+struct XianyuFetchResult {
+    price: Option<f64>,
+    url: Option<String>,
 }
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -604,7 +617,12 @@ fn extract_xianyu_script() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("system_toolbox_scripts");
     fs::create_dir_all(&dir).map_err(|e| format!("创建脚本目录失败：{e}"))?;
     let path = dir.join("xianyu_search.py");
-    fs::write(&path, SCRIPT).map_err(|e| format!("写出爬虫脚本失败：{e}"))?;
+    let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("scripts")
+        .join("xianyu_search.py");
+    let script_bytes = fs::read(&source_path).unwrap_or_else(|_| SCRIPT.to_vec());
+    fs::write(&path, script_bytes).map_err(|e| format!("写出爬虫脚本失败：{e}"))?;
     Ok(path)
 }
 
@@ -612,28 +630,33 @@ async fn fetch_xianyu(
     _client: &reqwest::Client,
     keyword: &str,
     app: tauri::AppHandle,
-) -> Result<f64, String> {
+) -> Result<XianyuFetchResult, String> {
+    run_xianyu_script(app, vec![keyword.to_string()], true).await
+}
+
+async fn run_xianyu_script(
+    app: tauri::AppHandle,
+    args: Vec<String>,
+    expect_price: bool,
+) -> Result<XianyuFetchResult, String> {
     let python = find_python().ok_or_else(|| "未找到 Python，请先安装 Python 3.x".to_string())?;
     let script = extract_xianyu_script()?;
-    let kw = keyword.to_string();
-    let should_open_login_loading = std::env::var("APPDATA")
-        .ok()
-        .map(|appdata| {
-            !std::path::Path::new(&appdata)
-                .join("system_toolbox")
-                .join("xianyu_session.json")
-                .exists()
-        })
-        .unwrap_or(false);
+    let script_display = script.display().to_string();
 
-    tokio::task::spawn_blocking(move || -> Result<f64, String> {
-        if should_open_login_loading {
-            let _ = app.emit("xianyu-need-login", ());
+    tokio::task::spawn_blocking(move || -> Result<XianyuFetchResult, String> {
+        let _ = app.emit("xianyu-log", serde_json::json!({
+            "status": "log",
+            "type": "info",
+            "message": format!("启动咸鱼脚本：{}", script_display),
+        }));
+
+        let mut command = Command::new(&python);
+        command.arg(&script);
+        command.env("PYTHONIOENCODING", "utf-8");
+        for arg in args {
+            command.arg(arg);
         }
-
-        let mut child = Command::new(&python)
-            .arg(&script)
-            .arg(&kw)
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(0x0800_0000)
@@ -642,8 +665,27 @@ async fn fetch_xianyu(
 
         let stdout = child.stdout.take()
             .ok_or_else(|| "无法获取脚本输出".to_string())?;
+        if let Some(stderr) = child.stderr.take() {
+            let stderr_app = app.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let _ = stderr_app.emit("xianyu-log", serde_json::json!({
+                        "status": "log",
+                        "type": "error",
+                        "message": format!("Python stderr：{}", trimmed),
+                    }));
+                }
+            });
+        }
+
         let reader = BufReader::new(stdout);
-        let mut last_result: Option<Result<f64, String>> = None;
+        let mut last_result = XianyuFetchResult::default();
+        let mut last_error: Option<String> = None;
 
         for line in reader.lines() {
             let line = match line {
@@ -660,8 +702,14 @@ async fn fetch_xianyu(
             };
 
             match json.get("status").and_then(|v| v.as_str()) {
+                Some("log") => {
+                    let _ = app.emit("xianyu-log", json.clone());
+                }
                 Some("need_login") => {
                     let _ = app.emit("xianyu-need-login", ());
+                }
+                Some("need_login_required") => {
+                    last_error = Some("请先完成咸鱼扫码登录".to_string());
                 }
                 Some("qr_ready") => {
                     let qr_b64 = json
@@ -677,27 +725,37 @@ async fn fetch_xianyu(
                     }
                 }
                 Some("login_ok") => {
-                    let _ = app.emit("xianyu-login-ok", ());
+                    let _ = app.emit("xianyu-login-ok", json.clone());
                     if let Ok(mut guard) = app.state::<XianyuQrState>().qr_b64.lock() {
                         *guard = None;
                     }
                 }
                 _ => {
                     if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
-                        last_result = Some(Err(err.to_string()));
+                        last_error = Some(err.to_string());
                     } else if let Some(price_val) = json.get("xianyu") {
                         if let Some(price) = price_val.as_f64() {
-                            last_result = Some(Ok(price));
-                        } else {
-                            last_result = Some(Err("咸鱼未返回价格".to_string()));
+                            last_result.price = Some(price);
                         }
+                        last_result.url = json
+                            .get("xianyu_url")
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.is_empty())
+                            .map(|v| v.to_string());
                     }
                 }
             }
         }
 
         let _ = child.wait();
-        last_result.unwrap_or_else(|| Err("咸鱼未返回价格".to_string()))
+        if let Some(err) = last_error {
+            return Err(err);
+        }
+        if expect_price {
+            Ok(last_result)
+        } else {
+            Ok(XianyuFetchResult::default())
+        }
     })
     .await
     .map_err(|e| format!("spawn 失败：{e}"))?
@@ -740,13 +798,39 @@ fn urlencoding(s: &str) -> String {
 #[tauri::command]
 fn clear_xianyu_session() -> Result<String, String> {
     let appdata = std::env::var("APPDATA").map_err(|_| "无法读取 APPDATA 环境变量".to_string())?;
-    let session_path = std::path::Path::new(&appdata).join("system_toolbox").join("xianyu_session.json");
+    let dir = std::path::Path::new(&appdata).join("system_toolbox");
+    let session_path = dir.join("xianyu_session.json");
+    let profile_path = dir.join("xianyu_profile.json");
+    let had_login = session_path.exists() || profile_path.exists();
     if session_path.exists() {
         fs::remove_file(&session_path).map_err(|e| format!("删除登录态失败：{e}"))?;
-        Ok("咸鱼登录态已清除，下次搜索将重新登录。".to_string())
+    }
+    if profile_path.exists() {
+        fs::remove_file(&profile_path).map_err(|e| format!("删除登录信息失败：{e}"))?;
+    }
+    if had_login {
+        Ok("咸鱼登录态已清除。".to_string())
     } else {
         Ok("暂无保存的登录态。".to_string())
     }
+}
+
+#[tauri::command]
+fn get_xianyu_session_info() -> Result<XianyuSessionInfo, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| "无法读取 APPDATA 环境变量".to_string())?;
+    let dir = std::path::Path::new(&appdata).join("system_toolbox");
+    let session_path = dir.join("xianyu_session.json");
+    let profile_path = dir.join("xianyu_profile.json");
+    let username = fs::read_to_string(profile_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|json| json.get("username").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .filter(|name| !name.trim().is_empty());
+
+    Ok(XianyuSessionInfo {
+        logged_in: session_path.exists(),
+        username,
+    })
 }
 
 #[tauri::command]
@@ -755,9 +839,18 @@ fn get_xianyu_qr(state: tauri::State<XianyuQrState>) -> Option<String> {
 }
 
 #[tauri::command]
+async fn start_xianyu_login(app: tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut guard) = app.state::<XianyuQrState>().qr_b64.lock() {
+        *guard = None;
+    }
+    run_xianyu_script(app, vec!["--login".to_string()], false).await?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn crawl_prices(app: tauri::AppHandle, keyword: String) -> Result<PriceResult, String> {
     if keyword.trim().is_empty() {
-        return Ok(PriceResult { taobao: None, douyin: None, xianyu: None });
+        return Ok(PriceResult { taobao: None, douyin: None, xianyu: None, xianyu_url: None });
     }
     let client = build_crawler_client()?;
     let (tb, dy, xy) = tokio::join!(
@@ -765,10 +858,12 @@ async fn crawl_prices(app: tauri::AppHandle, keyword: String) -> Result<PriceRes
         fetch_douyin(&client, &keyword),
         fetch_xianyu(&client, &keyword, app),
     );
+    let xy = xy?;
     Ok(PriceResult {
         taobao: tb.ok(),
         douyin: dy.ok(),
-        xianyu: xy.ok(),
+        xianyu: xy.price,
+        xianyu_url: xy.url,
     })
 }
 
@@ -787,6 +882,8 @@ pub fn run() {
             crawl_prices,
             clear_xianyu_session,
             get_xianyu_qr,
+            get_xianyu_session_info,
+            start_xianyu_login,
         ])
         .setup(|_app| {
             #[cfg(debug_assertions)]

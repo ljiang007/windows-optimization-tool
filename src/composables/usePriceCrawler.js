@@ -22,9 +22,10 @@ function createRowState() {
  * 结果自动回写 part.xianyu。
  *
  * @param {import('vue').Ref<Array>} parts - PcDiyWindowPage 的 parts ref
+ * @param {{ beforeCrawl?: (part: object, source: string) => boolean|Promise<boolean>, onLog?: (message: string, type?: string) => void }} options
  * @returns {{ getRowState: (key: string) => { loading: Ref<boolean>, error: Ref<string|null> }, manualCrawl: (part: object) => void }}
  */
-export function usePriceCrawler(parts) {
+export function usePriceCrawler(parts, options = {}) {
   // key -> { loading, error, timer }
   const stateMap = Object.fromEntries(
     parts.value.map(part => [part.key, createRowState()])
@@ -34,7 +35,7 @@ export function usePriceCrawler(parts) {
    * 实际发起爬取，调用 Rust 后端指令 crawl_prices
    * 期望后端返回: { xianyu: number|null }
    */
-  async function fetchPrices(part) {
+  async function fetchPrices(part, source = 'auto') {
     const state = stateMap[part.key]
     if (!part.model) {
       part.xianyu = ''
@@ -46,11 +47,22 @@ export function usePriceCrawler(parts) {
     state.error.value = null
 
     try {
+      if (options.beforeCrawl) {
+        const canCrawl = await options.beforeCrawl(part, source)
+        if (!canCrawl) return
+      }
+      options.onLog?.(`开始搜索 ${part.label}：${part.model}`, 'info')
       const result = await invoke('crawl_prices', { keyword: part.model })
       part.xianyu = result.xianyu != null ? String(result.xianyu) : ''
+      if (result.xianyu != null) {
+        options.onLog?.(`最低价搜索完成：${part.model}，咸鱼 ¥${result.xianyu}`, 'success')
+      } else {
+        options.onLog?.(`未搜索到价格：${part.model}`, 'warning')
+      }
     }
     catch (err) {
       state.error.value = typeof err === 'string' ? err : (err?.message ?? '爬取失败')
+      options.onLog?.(`搜索失败：${state.error.value}`, 'error')
     }
     finally {
       state.loading.value = false
@@ -63,7 +75,7 @@ export function usePriceCrawler(parts) {
   function scheduleCrawl(part) {
     const state = stateMap[part.key]
     clearTimeout(state.timer)
-    state.timer = setTimeout(() => fetchPrices(part), DEBOUNCE_MS)
+    state.timer = setTimeout(() => fetchPrices(part, 'auto'), DEBOUNCE_MS)
   }
 
   // 为每行的 model 字段注册 watcher
@@ -91,7 +103,7 @@ export function usePriceCrawler(parts) {
   function manualCrawl(part) {
     const state = stateMap[part.key]
     clearTimeout(state.timer)
-    fetchPrices(part)
+    fetchPrices(part, 'manual')
   }
 
   return { getRowState, manualCrawl }
