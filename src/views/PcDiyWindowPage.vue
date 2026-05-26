@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -99,12 +99,98 @@ const pricedCount = computed(() =>
 )
 
 const message = useMessage()
-const { getRowState, manualCrawl } = usePriceCrawler(parts)
+const xianyuSession = ref({ loggedIn: false, username: '' })
+const isLoginStarting = ref(false)
+const operationLogs = ref([])
+const logPanelRef = ref(null)
+const loginButtonText = computed(() => {
+  if (isLoginStarting.value) return '登录中'
+  return xianyuSession.value.loggedIn ? '重新登录' : '咸鱼登录'
+})
+
+const MAX_LOGS = 300
+let lastLoginWarnAt = 0
+
+function addLog(content, type = 'info') {
+  operationLogs.value.push({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    type,
+    content,
+  })
+  if (operationLogs.value.length > MAX_LOGS) {
+    operationLogs.value.splice(0, operationLogs.value.length - MAX_LOGS)
+  }
+  nextTick(() => {
+    if (logPanelRef.value) {
+      logPanelRef.value.scrollTop = logPanelRef.value.scrollHeight
+    }
+  })
+}
+
+function readEventMessage(payload) {
+  if (!payload) return ''
+  if (typeof payload === 'string') return payload
+  return payload.message || payload.url || ''
+}
+
+function handleBackendLog(payload) {
+  if (!payload) return
+  const type = typeof payload === 'object' ? (payload.type || 'info') : 'info'
+  const text = readEventMessage(payload)
+  if (text) addLog(text, type)
+  if (!text && payload.url) {
+    addLog(`商品链接：${payload.url}`, 'link')
+  }
+}
+
+async function refreshXianyuSession(silent = true) {
+  try {
+    const info = await invoke('get_xianyu_session_info')
+    xianyuSession.value = {
+      loggedIn: Boolean(info?.logged_in ?? info?.loggedIn),
+      username: info?.username || '',
+    }
+    if (!silent) {
+      addLog(
+        xianyuSession.value.loggedIn
+          ? `登录信息获取成功：${xianyuSession.value.username || '已登录用户'}`
+          : '登录信息获取成功：未登录',
+        xianyuSession.value.loggedIn ? 'success' : 'warning',
+      )
+    }
+  } catch (err) {
+    xianyuSession.value = { loggedIn: false, username: '' }
+    addLog(`登录信息获取失败：${typeof err === 'string' ? err : (err?.message ?? '未知错误')}`, 'error')
+  }
+}
+
+function showLoginRequired(source) {
+  const now = Date.now()
+  if (now - lastLoginWarnAt > 2500) {
+    lastLoginWarnAt = now
+    message.warning('请先完成咸鱼扫码登录，再搜索价格', { duration: 3500 })
+  }
+  addLog(`${source === 'manual' ? '手动搜索' : '自动搜索'}已拦截：未登录咸鱼`, 'warning')
+}
+
+async function beforeCrawl(part, source) {
+  await refreshXianyuSession()
+  if (xianyuSession.value.loggedIn) return true
+  showLoginRequired(source)
+  return false
+}
+
+const { getRowState, manualCrawl } = usePriceCrawler(parts, {
+  beforeCrawl,
+  onLog: addLog,
+})
 
 function clearPrices() {
   parts.value.forEach((part) => {
     part.xianyu = ''
   })
+  addLog('已清除所有价格，保留型号', 'info')
 }
 
 function resetAll() {
@@ -112,50 +198,88 @@ function resetAll() {
     part.model = ''
     part.xianyu = ''
   })
+  addLog('已重置全部配件型号和价格', 'info')
 }
 
 async function clearXianyuSession() {
   try {
     const msg = await invoke('clear_xianyu_session')
+    xianyuSession.value = { loggedIn: false, username: '' }
     message.success(msg, { duration: 4000 })
+    addLog(msg, 'warning')
   } catch (err) {
-    message.error(typeof err === 'string' ? err : (err?.message ?? '清除失败'), { duration: 5000 })
+    const errorText = typeof err === 'string' ? err : (err?.message ?? '清除失败')
+    message.error(errorText, { duration: 5000 })
+    addLog(`清除登录态失败：${errorText}`, 'error')
   }
 }
 
 let unlistenNeedLogin = null
 let unlistenLoginOk = null
+let unlistenXianyuLog = null
+let unlistenLoginUiReady = null
 let xianyuLoginWindow = null
 
+async function openXianyuLogin() {
+  if (xianyuLoginWindow) {
+    await xianyuLoginWindow.setFocus().catch(() => {})
+    return
+  }
+
+  const loginUrl = `${window.location.origin}/#/xianyu-login`
+  xianyuLoginWindow = new WebviewWindow('xianyu-login', {
+    url: loginUrl,
+    title: '咸鱼扫码登录',
+    width: 420,
+    height: 500,
+    center: true,
+    resizable: true,
+    alwaysOnTop: true,
+  })
+  xianyuLoginWindow.once('tauri://destroyed', () => {
+    xianyuLoginWindow = null
+    isLoginStarting.value = false
+  })
+}
+
 onMounted(async () => {
+  await refreshXianyuSession(false)
+
   unlistenNeedLogin = await listen('xianyu-need-login', () => {
-    if (xianyuLoginWindow) return
-    const loginUrl = `${window.location.origin}/#/xianyu-login`
-    xianyuLoginWindow = new WebviewWindow('xianyu-login', {
-      url: loginUrl,
-      title: '咸鱼扫码登录',
-      width: 420,
-      height: 500,
-      center: true,
-      resizable: true,
-      alwaysOnTop: true,
-    })
-    xianyuLoginWindow.once('tauri://destroyed', () => {
-      xianyuLoginWindow = null
-    })
+    addLog('咸鱼要求扫码登录', 'warning')
+    if (!xianyuLoginWindow) openXianyuLogin()
   })
 
-  unlistenLoginOk = await listen('xianyu-login-ok', () => {
-    if (xianyuLoginWindow) {
-      xianyuLoginWindow.close()
-      xianyuLoginWindow = null
+  unlistenLoginUiReady = await listen('xianyu-login-ui-ready', async () => {
+    if (!xianyuLoginWindow || isLoginStarting.value) return
+    isLoginStarting.value = true
+    addLog('获取登录二维码', 'info')
+    try {
+      await invoke('start_xianyu_login')
+    } catch (err) {
+      const errorText = typeof err === 'string' ? err : (err?.message ?? '登录启动失败')
+      message.error(errorText, { duration: 5000 })
+      addLog(`登录启动失败：${errorText}`, 'error')
+    } finally {
+      isLoginStarting.value = false
     }
+  })
+
+  unlistenLoginOk = await listen('xianyu-login-ok', async () => {
+    addLog('扫码成功，登录态已保存', 'success')
+    await refreshXianyuSession(false)
+  })
+
+  unlistenXianyuLog = await listen('xianyu-log', (event) => {
+    handleBackendLog(event.payload)
   })
 })
 
 onUnmounted(() => {
   if (unlistenNeedLogin) unlistenNeedLogin()
+  if (unlistenLoginUiReady) unlistenLoginUiReady()
   if (unlistenLoginOk) unlistenLoginOk()
+  if (unlistenXianyuLog) unlistenXianyuLog()
 })
 
 const missingParts = computed(() =>
@@ -180,8 +304,18 @@ const widestGap = computed(() =>
           <h1>电脑DIY</h1>
         </div>
         <div class="header-right">
-          <div class="platform-badges" aria-label="支持平台">
-            <span v-for="platform in platformFields" :key="platform.key">{{ platform.label }}</span>
+          <div class="xianyu-login-box" aria-label="咸鱼登录">
+            <span class="login-user" :class="{ empty: !xianyuSession.loggedIn }">
+              {{ xianyuSession.loggedIn ? (xianyuSession.username || '已登录用户') : '未登录' }}
+            </span>
+            <button
+              class="login-btn"
+              :class="{ logged: xianyuSession.loggedIn }"
+              :disabled="isLoginStarting"
+              @click="openXianyuLogin"
+            >
+              {{ loginButtonText }}
+            </button>
           </div>
           <div class="header-actions">
             <button class="action-btn clear-btn" title="清除所有价格，保留型号" @click="clearPrices">清除价格</button>
@@ -286,11 +420,27 @@ const widestGap = computed(() =>
         </div>
       </section>
     </section>
+    <aside class="operation-log" aria-label="操作日志">
+      <div class="log-title">
+        <strong>操作日志</strong>
+        <span>{{ operationLogs.length }}</span>
+      </div>
+      <div ref="logPanelRef" class="log-screen">
+        <p v-if="operationLogs.length === 0" class="log-empty">暂无操作日志</p>
+        <p v-for="item in operationLogs" :key="item.id" class="log-line" :class="`log-${item.type}`">
+          <span class="log-time">[{{ item.time }}]</span>
+          <span class="log-text">{{ item.content }}</span>
+        </p>
+      </div>
+    </aside>
   </main>
 </template>
 
 <style scoped>
 .pc-diy-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 10px;
   height: 100vh;
   padding: 10px;
   overflow: hidden;
@@ -350,10 +500,10 @@ h1 {
   min-width: 0;
 }
 
-.platform-badges {
+.xianyu-login-box {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
   justify-content: flex-end;
   min-width: 0;
 }
@@ -407,7 +557,8 @@ h1 {
   background: rgba(200, 180, 255, 0.9);
 }
 
-.platform-badges span,
+.login-user,
+.login-btn,
 .source-chip {
   display: inline-flex;
   align-items: center;
@@ -420,10 +571,42 @@ h1 {
   letter-spacing: 0.04em;
 }
 
-.platform-badges span {
+.login-user {
+  max-width: 180px;
   border: 1px solid rgba(28, 43, 68, 0.12);
   color: #1a2533;
   background: #f5f7fb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-user.empty {
+  color: #7a8390;
+  background: #eef2f6;
+}
+
+.login-btn {
+  border: 1px solid rgba(198, 81, 48, 0.22);
+  color: #9c351f;
+  background: rgba(255, 230, 220, 0.9);
+  cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.login-btn:hover:not(:disabled) {
+  background: rgba(255, 205, 188, 0.95);
+}
+
+.login-btn.logged {
+  border-color: rgba(32, 128, 76, 0.2);
+  color: #146c3f;
+  background: rgba(212, 244, 224, 0.9);
+}
+
+.login-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .summary-strip {
@@ -666,6 +849,8 @@ h1 {
 
 @media (max-width: 900px) {
   .pc-diy-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) 220px;
     padding: 6px;
   }
 
@@ -676,5 +861,83 @@ h1 {
   h1 {
     font-size: 20px;
   }
+}
+
+.operation-log {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #20242a;
+  border-radius: 14px;
+  background: #050608;
+  color: #f4f7fb;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.log-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: #101418;
+}
+
+.log-title strong {
+  font-size: 13px;
+}
+
+.log-title span {
+  color: #9ca9b7;
+  font-size: 11px;
+}
+
+.log-screen {
+  min-height: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.log-empty {
+  margin: 0;
+  color: #7e8994;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  margin: 0 0 6px;
+  word-break: break-all;
+}
+
+.log-time {
+  color: #8a97a5;
+}
+
+.log-text {
+  color: #f4f7fb;
+}
+
+.log-success .log-text {
+  color: #87f2a2;
+}
+
+.log-warning .log-text {
+  color: #ffd36b;
+}
+
+.log-error .log-text {
+  color: #ff8a8a;
+}
+
+.log-link .log-text {
+  color: #80c7ff;
 }
 </style>

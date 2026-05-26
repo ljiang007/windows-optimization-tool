@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 const qrImg = ref('')
@@ -9,6 +9,7 @@ const status = ref('loading')
 
 let pollTimer = null
 let timeoutTimer = null
+let closeTimer = null
 let unlistenQrReady = null
 let unlistenLoginOk = null
 
@@ -41,31 +42,35 @@ function showQr(qr) {
 }
 
 onMounted(async () => {
-  await pollQrCode()
-  if (status.value !== 'ready') {
-    pollTimer = setInterval(pollQrCode, 300)
-  }
-
-  timeoutTimer = setTimeout(() => {
-    if (status.value === 'loading') {
-      status.value = 'timeout'
-    }
-  }, 20000)
-
   unlistenQrReady = await listen('xianyu-qr-ready', (event) => {
     showQr(event.payload)
   })
 
   unlistenLoginOk = await listen('xianyu-login-ok', async () => {
     status.value = 'done'
-    await new Promise(r => setTimeout(r, 2000))
-    await getCurrentWebviewWindow().close().catch(() => {})
+    if (closeTimer) clearTimeout(closeTimer)
+    closeTimer = setTimeout(async () => {
+      await getCurrentWebviewWindow().close().catch(() => {})
+    }, 2000)
   })
+
+  await pollQrCode()
+  if (status.value !== 'ready' && status.value !== 'done') {
+    pollTimer = setInterval(pollQrCode, 300)
+    await emit('xianyu-login-ui-ready')
+  }
+
+  timeoutTimer = setTimeout(() => {
+    if (status.value === 'loading') {
+      status.value = 'timeout'
+    }
+  }, 100000)
 })
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (timeoutTimer) clearTimeout(timeoutTimer)
+  if (closeTimer) clearTimeout(closeTimer)
   if (unlistenQrReady) unlistenQrReady()
   if (unlistenLoginOk) unlistenLoginOk()
 })
