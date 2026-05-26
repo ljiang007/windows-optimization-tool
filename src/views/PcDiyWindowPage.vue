@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { usePriceCrawler } from '../composables/usePriceCrawler'
 
 const parts = ref([
   { key: 'cpu', label: 'CPU', model: '', taobao: '', douyin: '', xianyu: '' },
@@ -95,6 +96,8 @@ const pricedCount = computed(() =>
   rows.value.filter((row) => row.bestPrice != null).length,
 )
 
+const { getRowState, manualCrawl } = usePriceCrawler(parts)
+
 const missingParts = computed(() =>
   rows.value
     .filter((row) => !row.part.model.trim() || row.bestPrice == null)
@@ -168,13 +171,27 @@ const widestGap = computed(() =>
                 <td class="part-cell">
                   <strong>{{ row.label }}</strong>
                 </td>
-                <td>
-                  <input
-                    v-model.trim="row.part.model"
-                    class="model-input"
-                    type="text"
-                    :placeholder="`输入${row.label}型号或搜索词`"
-                  >
+                <td class="model-cell">
+                  <div class="model-wrap">
+                    <input
+                      v-model.trim="row.part.model"
+                      class="model-input"
+                      type="text"
+                      :placeholder="`输入${row.label}型号或搜索词`"
+                    >
+                    <button
+                      class="crawl-btn"
+                      :class="{ spinning: getRowState(row.key).loading.value }"
+                      :disabled="getRowState(row.key).loading.value || !row.part.model"
+                      :title="getRowState(row.key).loading.value ? '爬取中…' : '立即爬取'"
+                      @click="manualCrawl(row.part)"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                  <p v-if="getRowState(row.key).error.value" class="crawl-error">
+                    {{ getRowState(row.key).error.value }}
+                  </p>
                 </td>
                 <td v-for="platform in platformFields" :key="`${row.key}-${platform.key}`">
                   <input
@@ -470,6 +487,63 @@ h1 {
   .summary-strip {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+}
+
+.model-cell {
+  padding: 4px 8px !important;
+}
+
+.model-wrap {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.model-wrap .model-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.crawl-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(33, 49, 75, 0.14);
+  border-radius: 7px;
+  color: #3a5a82;
+  background: rgba(220, 232, 248, 0.7);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
+}
+
+.crawl-btn:hover:not(:disabled) {
+  background: rgba(176, 210, 255, 0.9);
+}
+
+.crawl-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.crawl-btn.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.crawl-error {
+  margin: 3px 0 0;
+  color: #c0392b;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 @media (max-width: 900px) {
