@@ -56,14 +56,48 @@ def _parse_prices_from_response(raw_json: str) -> list:
 def _parse_links_from_response(raw_json: str) -> list:
     links = []
     for raw in re.findall(r'https?:\\?/\\?/[^"\\]+', raw_json):
-        url = raw.replace('\\/', '/')
-        if 'goofish.com' in url and ('item' in url or 'detail' in url):
+        url = _normalize_item_url(raw)
+        if url:
             links.append(url)
 
     for item_id in re.findall(r'"(?:itemId|item_id|id)"\s*:\s*"?(\d{6,})"?', raw_json):
         links.append(f'https://www.goofish.com/item?id={item_id}')
 
     return _unique(links)
+
+
+def _normalize_item_url(value: str) -> str:
+    if not value:
+        return ''
+    url = str(value).replace('\\/', '/').strip()
+    if url.startswith('//'):
+        url = f'https:{url}'
+    if 'goofish.com' not in url or ('item' not in url and 'detail' not in url):
+        return ''
+    return url
+
+
+def _parse_price(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        price = float(value)
+    else:
+        match = re.search(r'(\d+(?:\.\d+)?)', str(value).replace(',', ''))
+        if not match:
+            return None
+        price = float(match.group(1))
+    if 1 < price < 999999:
+        return price
+    return None
+
+
+def _format_price(price) -> str:
+    if price is None:
+        return '--'
+    if float(price).is_integer():
+        return str(int(price))
+    return f'{price:.2f}'.rstrip('0').rstrip('.')
 
 
 def _unique(values: list) -> list:
@@ -77,10 +111,28 @@ def _unique(values: list) -> list:
     return results
 
 
+def _unique_items(items: list) -> list:
+    seen = set()
+    results = []
+    for item in items:
+        url = item.get('url')
+        price = _parse_price(item.get('price'))
+        if not url or price is None or url in seen:
+            continue
+        seen.add(url)
+        results.append({'url': url, 'price': price})
+    return results
+
+
+def _sort_items_by_price(items: list) -> list:
+    return sorted(_unique_items(items), key=lambda item: item['price'])
+
+
 def _run_search(p, keyword: str, session_file: Path):
-    """headless 搜索，返回 (价格列表, 是否需要登录, 商品链接列表)"""
+    """headless 搜索，返回 (价格列表, 是否需要登录, 商品链接列表, 带价格商品列表)"""
     api_prices = []
     item_links = []
+    priced_items = []
 
     browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
     ctx_kwargs = {'user_agent': UA, 'viewport': {'width': 1280, 'height': 800}}
@@ -127,25 +179,119 @@ def _run_search(p, keyword: str, session_file: Path):
         item_links.extend(dom_links)
     except Exception:
         pass
+    try:
+        dom_items = page.eval_on_selector_all(
+            'a[href]',
+            """
+            (els, keyword) => {
+              const normalize = (href) => {
+                try { return new URL(href, location.href).href } catch { return '' }
+              };
+              const normalizeText = (text) => (text || '').replace(/\\s+/g, '').toUpperCase();
+              const keywordText = normalizeText(keyword);
+              const isVisible = (el) => {
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+              };
+              const findPrice = (text) => {
+                if (!text) return null;
+                const matches = [...text.matchAll(/(?:¥|￥)\\s*(\\d+(?:\\.\\d+)?)/g)]
+                  .map((m) => Number(m[1]))
+                  .filter((n) => Number.isFinite(n) && n > 1 && n < 999999);
+                return matches.length ? Math.min(...matches) : null;
+              };
+              const isRejectedItem = (text) => {
+                const rejectedTerms = ['坏件', '尸体', '点不亮', '不亮', '故障', '报废', '钥匙扣', '练手', '空盒', '包装盒'];
+                return rejectedTerms.some((term) => text.includes(term));
+              };
+              const findCardPrice = (link) => {
+                let node = link;
+                for (let i = 0; i < 6 && node; i += 1) {
+                  if (!isVisible(node)) {
+                    node = node.parentElement;
+                    continue;
+                  }
+                  const rect = node.getBoundingClientRect();
+                  const text = node.innerText || node.textContent || '';
+                  const price = findPrice(text);
+                  const textOk = text.length > 0 && text.length < 900;
+                  const sizeOk = rect.width >= 120 && rect.height >= 60 && rect.height <= 520 && rect.width <= window.innerWidth + 80;
+                  const keywordOk = !keywordText || normalizeText(text).includes(keywordText);
+                  if (price != null && textOk && sizeOk && keywordOk && !isRejectedItem(text)) return price;
+                  node = node.parentElement;
+                }
+                return null;
+              };
+              const seen = new Set();
+              const results = [];
+              for (const a of els) {
+                const url = normalize(a.getAttribute('href') || '');
+                if (!url.includes('goofish.com') || (!url.includes('item') && !url.includes('detail'))) continue;
+                const price = findCardPrice(a);
+                if (price != null && !seen.has(url)) {
+                  seen.add(url);
+                  results.push({ url, price });
+                }
+              }
+              return results;
+            }
+            """,
+            keyword,
+        )
+        priced_items.extend(_sort_items_by_price(dom_items or [])[:8])
+    except Exception:
+        pass
     browser.close()
 
-    needs_login = not api_prices and '立即登录' in body
-    return api_prices, needs_login, _unique(item_links)
+    needs_login = not api_prices and not priced_items and '立即登录' in body
+    return api_prices, needs_login, _unique(item_links), _unique_items(priced_items)
 
 
-def _extract_username(ctx) -> str:
-    for cookie in ctx.cookies():
-        if cookie.get('name') in ('tracknick', '_nk_', 'lgc', 'sn'):
-            value = cookie.get('value') or ''
-            if value:
-                return unquote(value)
-    return ''
+def _collect_profile(ctx, page=None) -> dict:
+    candidate_names = ('tracknick', '_nk_', 'lgc', 'sn', 'unb')
+    cookies = ctx.cookies()
+    candidates = {}
+    for cookie in cookies:
+        name = cookie.get('name')
+        if name in candidate_names:
+            candidates[name] = unquote(cookie.get('value') or '')
+
+    storage = {}
+    if page:
+        try:
+            storage = page.evaluate("""
+                () => {
+                  const pick = (source) => {
+                    const result = {};
+                    for (let i = 0; i < source.length; i += 1) {
+                      const key = source.key(i);
+                      if (!key || !/user|nick|member|login|goofish|xianyu|idle/i.test(key)) continue;
+                      result[key] = source.getItem(key);
+                    }
+                    return result;
+                  };
+                  return {
+                    localStorage: pick(window.localStorage),
+                    sessionStorage: pick(window.sessionStorage),
+                  };
+                }
+            """)
+        except Exception:
+            storage = {}
+
+    return {
+        'display_name': '已登录',
+        'candidate_cookies': candidates,
+        'cookie_names': sorted({cookie.get('name') for cookie in cookies if cookie.get('name')}),
+        'storage': storage,
+    }
 
 
-def _save_profile(username: str):
+def _save_profile(profile: dict):
     PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROFILE_FILE.write_text(
-        json.dumps({'username': username or '已登录用户'}, ensure_ascii=False),
+        json.dumps(profile, ensure_ascii=False),
         encoding='utf-8',
     )
 
@@ -250,7 +396,7 @@ def _do_login(p, session_file: Path):
                     verify_page.wait_for_timeout(1500)
                     verify_text = verify_page.inner_text('body')
                     login_ok = '立即登录' not in verify_text
-                    username = _extract_username(ctx)
+                    profile = _collect_profile(ctx, verify_page)
                     verify_page.close()
                     if login_ok:
                         break
@@ -267,12 +413,13 @@ def _do_login(p, session_file: Path):
 
     session_file.parent.mkdir(parents=True, exist_ok=True)
     ctx.storage_state(path=str(session_file))
-    username = _extract_username(ctx) or locals().get('username', '') or '已登录用户'
-    _save_profile(username)
+    profile = locals().get('profile') or _collect_profile(ctx)
+    _save_profile(profile)
     browser.close()
 
-    _emit_log(f'扫码成功：{username}', 'success')
-    _emit({'status': 'login_ok', 'username': username})
+    _emit_log(f"登录信息内容：{json.dumps(profile, ensure_ascii=False)}", 'info')
+    _emit_log('扫码成功：已登录', 'success')
+    _emit({'status': 'login_ok', 'username': '已登录', 'profile': profile})
 
 
 def login_xianyu():
@@ -287,18 +434,40 @@ def search_xianyu(keyword: str):
 
     with sync_playwright() as p:
         _emit_log(f'商品最低价搜索：{keyword}')
-        prices, needs_login, links = _run_search(p, keyword, SESSION_FILE)
+        prices, needs_login, links, priced_items = _run_search(p, keyword, SESSION_FILE)
 
         if needs_login:
             _emit_log('未检测到有效登录态，已停止搜索', 'warning')
             _emit({'status': 'need_login_required'})
             return None, None
 
-    for link in links[:8]:
-        _emit_log(f'搜到商品链接：{link}', 'link', url=link)
+    priced_items = _sort_items_by_price(priced_items)[:8]
+
+    for item in priced_items:
+        _emit_log(
+            f'搜到商品链接（￥{_format_price(item.get("price"))}）：{item.get("url")}',
+            'link',
+            url=item.get('url'),
+        )
+
+    if not priced_items:
+        for link in links[:8]:
+            _emit_log(f'搜到商品链接（￥--）：{link}', 'link', url=link)
+
+    if priced_items:
+        best = priced_items[0]
+        _emit_log(
+            f'最终采用最低价：￥{_format_price(best["price"])}，链接：{best["url"]}',
+            'success',
+            url=best['url'],
+        )
+        return best['price'], best['url']
+
+    if links:
+        return None, links[0]
 
     candidates = sorted(set(prices))
-    return (candidates[0] if candidates else None), (links[0] if links else None)
+    return (candidates[0] if candidates else None), None
 
 
 if __name__ == '__main__':

@@ -22,6 +22,7 @@ struct PriceResult {
 struct XianyuSessionInfo {
     logged_in: bool,
     username: Option<String>,
+    profile: Option<serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -485,6 +486,22 @@ fn open_google_chrome_page() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn open_external_url(url: String) -> Result<String, String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("只允许打开 http/https 链接".to_string());
+    }
+
+    Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", trimmed])
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .map_err(|e| format!("打开链接失败：{e}"))?;
+
+    Ok("已打开链接。".to_string())
+}
+
+#[tauri::command]
 async fn open_bundled_tool(app: tauri::AppHandle, tool_key: String) -> Result<String, String> {
     // 只允许打开白名单里的内置工具，避免前端传入任意本地路径执行。
     let tool = find_bundled_tool(&tool_key).ok_or_else(|| "未配置该工具。".to_string())?;
@@ -815,21 +832,43 @@ fn clear_xianyu_session() -> Result<String, String> {
     }
 }
 
+fn format_xianyu_username(profile: Option<&serde_json::Value>) -> String {
+    let nick = profile
+        .and_then(|json| json.get("candidate_cookies"))
+        .and_then(|cookies| cookies.as_object())
+        .and_then(|cookies| {
+            ["tracknick", "_nk_", "lgc", "sn", "unb"]
+                .iter()
+                .find_map(|key| cookies.get(*key).and_then(|value| value.as_str()))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match nick {
+        Some(name) => format!("已登录/{name}"),
+        None => "已登录".to_string(),
+    }
+}
+
 #[tauri::command]
 fn get_xianyu_session_info() -> Result<XianyuSessionInfo, String> {
     let appdata = std::env::var("APPDATA").map_err(|_| "无法读取 APPDATA 环境变量".to_string())?;
     let dir = std::path::Path::new(&appdata).join("system_toolbox");
     let session_path = dir.join("xianyu_session.json");
     let profile_path = dir.join("xianyu_profile.json");
-    let username = fs::read_to_string(profile_path)
+    let profile = fs::read_to_string(profile_path)
         .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|json| json.get("username").and_then(|v| v.as_str()).map(|v| v.to_string()))
-        .filter(|name| !name.trim().is_empty());
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let username = if session_path.exists() {
+        Some(format_xianyu_username(profile.as_ref()))
+    } else {
+        None
+    };
 
     Ok(XianyuSessionInfo {
         logged_in: session_path.exists(),
         username,
+        profile,
     })
 }
 
@@ -879,6 +918,7 @@ pub fn run() {
             open_yy_download_page,
             open_qishui_music_page,
             open_google_chrome_page,
+            open_external_url,
             crawl_prices,
             clear_xianyu_session,
             get_xianyu_qr,
