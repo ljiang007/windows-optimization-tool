@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { LogicalSize } from '@tauri-apps/api/dpi'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useMessage } from 'naive-ui'
 import NoticePanel from '../components/toolbox/NoticePanel.vue'
 import SystemOptimizePanel from '../components/toolbox/SystemOptimizePanel.vue'
@@ -149,6 +150,49 @@ async function openGoogleChromePage() {
   }
 }
 
+function createPcDiyWindowUrl() {
+  const pageUrl = new URL(window.location.pathname || '/', window.location.origin)
+  pageUrl.hash = '/pc-diy'
+  return pageUrl.toString()
+}
+
+async function openPcDiyWindow() {
+  const pageUrl = createPcDiyWindowUrl()
+
+  if (!('__TAURI_INTERNALS__' in window)) {
+    window.open(pageUrl, '_blank', 'width=1280,height=900')
+    return
+  }
+
+  try {
+    const existingWindow = await WebviewWindow.getByLabel('pc-diy')
+    if (existingWindow) {
+      await existingWindow.show().catch(() => {})
+      await existingWindow.unminimize().catch(() => {})
+      await existingWindow.setFocus().catch(() => {})
+      return
+    }
+
+    const pcDiyWindow = new WebviewWindow('pc-diy', {
+      title: '电脑DIY比价台',
+      url: pageUrl,
+      width: 1280,
+      height: 900,
+      minWidth: 1120,
+      minHeight: 760,
+      center: true,
+      resizable: true,
+      focus: true,
+    })
+
+    pcDiyWindow.once('tauri://error', (event) => {
+      message.warning(`打开电脑DIY窗口失败：${String(event.payload)}`)
+    })
+  } catch (error) {
+    message.warning(`打开电脑DIY窗口失败：${String(error)}`)
+  }
+}
+
 async function handleToolClick(toolName) {
   if (loading.value) return
 
@@ -179,6 +223,11 @@ async function handleToolClick(toolName) {
 
   if (toolName === '谷歌浏览器') {
     await openGoogleChromePage()
+    return
+  }
+
+  if (toolName === '电脑DIY') {
+    await openPcDiyWindow()
     return
   }
 
