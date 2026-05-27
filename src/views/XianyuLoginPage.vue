@@ -42,6 +42,8 @@ function showQr(qr) {
 }
 
 onMounted(async () => {
+  await invoke('clear_xianyu_qr').catch(() => {})
+
   unlistenQrReady = await listen('xianyu-qr-ready', (event) => {
     showQr(event.payload)
   })

@@ -15,7 +15,8 @@ import json
 import os
 import re
 import time
-from urllib.parse import unquote
+import argparse
+from urllib.parse import unquote, urlparse
 from pathlib import Path
 
 UA = (
@@ -26,6 +27,15 @@ UA = (
 STEALTH = "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
 SESSION_FILE = Path(os.environ.get('APPDATA', '.')) / 'system_toolbox' / 'xianyu_session.json'
 PROFILE_FILE = Path(os.environ.get('APPDATA', '.')) / 'system_toolbox' / 'xianyu_profile.json'
+FILTER_CONFIG_FILE = Path(__file__).with_name('xianyu_filter_keywords.json')
+LOGIN_COOKIE_NAMES = (
+    'tracknick', '_nk_', 'lgc', 'sn', 'unb', 'dnk', 'lid', 'cookie17',
+    '_l_g_', 'sgcookie', 'skt', 'csg',
+)
+FILTER_CONFIG_CACHE = None
+LOGIN_PROMPTS = ('立即登录', '扫码登录', '手机扫码登录', '登录/注册', '请登录')
+LOGIN_SCAN_TEXTS = ('扫码成功', '扫描成功', '已扫码', '请在手机上确认', '手机确认', '确认登录')
+LOGIN_SUCCESS_TEXTS = ('登录成功', '授权成功', '已确认', '确认成功', '登录完成')
 
 
 def _emit(payload: dict):
@@ -128,11 +138,34 @@ def _sort_items_by_price(items: list) -> list:
     return sorted(_unique_items(items), key=lambda item: item['price'])
 
 
-def _run_search(p, keyword: str, session_file: Path):
+def _load_filter_config() -> dict:
+    global FILTER_CONFIG_CACHE
+    if FILTER_CONFIG_CACHE is not None:
+        return FILTER_CONFIG_CACHE
+
+    try:
+        FILTER_CONFIG_CACHE = json.loads(FILTER_CONFIG_FILE.read_text(encoding='utf-8'))
+    except Exception as exc:
+        _emit_log(f'过滤词配置读取失败，使用空配置：{exc}', 'warning')
+        FILTER_CONFIG_CACHE = {}
+    return FILTER_CONFIG_CACHE
+
+
+def _get_rejected_terms(category: str = '') -> list:
+    config = _load_filter_config()
+    terms = []
+    terms.extend(config.get('default') or [])
+    if category:
+        terms.extend(config.get(category) or [])
+    return _unique([str(term).strip() for term in terms if str(term).strip()])
+
+
+def _run_search(p, keyword: str, session_file: Path, category: str = ''):
     """headless 搜索，返回 (价格列表, 是否需要登录, 商品链接列表, 带价格商品列表)"""
     api_prices = []
     item_links = []
     priced_items = []
+    rejected_terms = _get_rejected_terms(category)
 
     browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
     ctx_kwargs = {'user_agent': UA, 'viewport': {'width': 1280, 'height': 800}}
@@ -183,7 +216,9 @@ def _run_search(p, keyword: str, session_file: Path):
         dom_items = page.eval_on_selector_all(
             'a[href]',
             """
-            (els, keyword) => {
+            (els, options) => {
+              const keyword = options.keyword || '';
+              const rejectedTerms = options.rejectedTerms || [];
               const normalize = (href) => {
                 try { return new URL(href, location.href).href } catch { return '' }
               };
@@ -202,7 +237,6 @@ def _run_search(p, keyword: str, session_file: Path):
                 return matches.length ? Math.min(...matches) : null;
               };
               const isRejectedItem = (text) => {
-                const rejectedTerms = ['坏件', '尸体', '点不亮', '不亮', '故障', '报废', '钥匙扣', '练手', '空盒', '包装盒'];
                 return rejectedTerms.some((term) => text.includes(term));
               };
               const findCardPrice = (link) => {
@@ -237,7 +271,7 @@ def _run_search(p, keyword: str, session_file: Path):
               return results;
             }
             """,
-            keyword,
+            {'keyword': keyword, 'rejectedTerms': rejected_terms},
         )
         priced_items.extend(_sort_items_by_price(dom_items or [])[:8])
     except Exception:
@@ -249,12 +283,11 @@ def _run_search(p, keyword: str, session_file: Path):
 
 
 def _collect_profile(ctx, page=None) -> dict:
-    candidate_names = ('tracknick', '_nk_', 'lgc', 'sn', 'unb')
     cookies = ctx.cookies()
     candidates = {}
     for cookie in cookies:
         name = cookie.get('name')
-        if name in candidate_names:
+        if name in LOGIN_COOKIE_NAMES:
             candidates[name] = unquote(cookie.get('value') or '')
 
     storage = {}
@@ -288,6 +321,80 @@ def _collect_profile(ctx, page=None) -> dict:
     }
 
 
+def _has_login_cookie(profile: dict) -> bool:
+    candidates = profile.get('candidate_cookies') or {}
+    return any(str(value).strip() for value in candidates.values())
+
+
+def _text_needs_login(text: str) -> bool:
+    return any(prompt in (text or '') for prompt in LOGIN_PROMPTS)
+
+
+def _has_any_text(text: str, candidates: tuple) -> bool:
+    return any(candidate in (text or '') for candidate in candidates)
+
+
+def _is_goofish_page(url: str) -> bool:
+    try:
+        return urlparse(url).hostname in ('www.goofish.com', 'goofish.com')
+    except Exception:
+        return False
+
+
+def _read_login_page_signals(page) -> tuple:
+    text_parts = []
+    frame_urls = []
+    for frame in page.frames:
+        try:
+            frame_urls.append(frame.url)
+        except Exception:
+            pass
+        try:
+            text_parts.append(frame.inner_text('body', timeout=1000))
+        except Exception:
+            pass
+
+    body_text = '\n'.join(text for text in text_parts if text)
+    scan_seen = _has_any_text(body_text, LOGIN_SCAN_TEXTS)
+    success_seen = _has_any_text(body_text, LOGIN_SUCCESS_TEXTS) or any(_is_goofish_page(url) for url in frame_urls)
+    return body_text, scan_seen, success_seen, frame_urls
+
+
+def _verify_login_context(ctx, allow_text_fallback: bool = False) -> tuple:
+    """校验扫码后的同一浏览器上下文是否已经拿到登录态。"""
+    profile = _collect_profile(ctx)
+    if _has_login_cookie(profile):
+        return True, profile, '检测到登录 Cookie'
+
+    verify_page = None
+    try:
+        verify_page = ctx.new_page()
+        verify_page.add_init_script(STEALTH)
+        verify_page.goto('https://www.goofish.com/', wait_until='domcontentloaded', timeout=15000)
+        verify_page.wait_for_timeout(1500)
+        verify_text = verify_page.inner_text('body')
+        profile = _collect_profile(ctx, verify_page)
+        if _has_login_cookie(profile):
+            return True, profile, '首页校验检测到登录 Cookie'
+        if allow_text_fallback and verify_text and not _text_needs_login(verify_text):
+            return True, profile, '首页未出现登录提示'
+    except Exception as exc:
+        return False, profile, f'登录态校验失败：{exc}'
+    finally:
+        if verify_page:
+            try:
+                verify_page.close()
+            except Exception:
+                pass
+
+    return False, profile, '仍未检测到有效登录态'
+
+
+def _format_cookie_names(profile: dict) -> str:
+    names = profile.get('cookie_names') or []
+    return ','.join(names[:30]) if names else '--'
+
+
 def _save_profile(profile: dict):
     PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROFILE_FILE.write_text(
@@ -313,7 +420,15 @@ def _do_login(p, session_file: Path):
     _emit_log('获取登录二维码')
     _emit_log('登录脚本启动：准备启动 Chromium')
 
-    browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+    browser = p.chromium.launch(
+        headless=False,
+        args=[
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--window-position=-32000,-32000',
+            '--window-size=500,600',
+        ],
+    )
     ctx = browser.new_context(user_agent=UA, viewport={'width': 500, 'height': 600})
     page = ctx.new_page()
     page.add_init_script(STEALTH)
@@ -370,38 +485,44 @@ def _do_login(p, session_file: Path):
 
     _emit({'status': 'qr_ready', 'qr_b64': qr_b64})
     _emit_log('登录二维码已生成，请扫码')
+    _emit_log('等待手机扫码并确认登录')
 
-    # 等待扫码成功：必须实际访问咸鱼首页验证不再显示「立即登录」，避免游客 cookie 误判
+    # 等待扫码成功：扫码、手机确认、Cookie 写入不是同一瞬间，逐步判断可避免误判。
     login_ok = False
+    profile = {}
+    last_verify_time = 0
+    last_debug_time = 0
+    scan_logged = False
+    success_logged = False
     deadline = time.time() + 180
     while time.time() < deadline:
         try:
-            body_text = ''
-            try:
-                body_text = page.inner_text('body')
-            except Exception:
-                pass
-            maybe_confirmed = (
-                '扫码成功' in body_text
-                or '登录成功' in body_text
-                or '已确认' in body_text
-                or '授权成功' in body_text
-                or 'www.goofish.com' in page.url
-            )
-            if maybe_confirmed:
-                try:
-                    verify_page = ctx.new_page()
-                    verify_page.add_init_script(STEALTH)
-                    verify_page.goto('https://www.goofish.com/', wait_until='domcontentloaded', timeout=15000)
-                    verify_page.wait_for_timeout(1500)
-                    verify_text = verify_page.inner_text('body')
-                    login_ok = '立即登录' not in verify_text
-                    profile = _collect_profile(ctx, verify_page)
-                    verify_page.close()
-                    if login_ok:
-                        break
-                except Exception:
-                    pass
+            _body_text, scan_seen, success_seen, _frame_urls = _read_login_page_signals(page)
+            if scan_seen and not scan_logged:
+                scan_logged = True
+                _emit_log('已扫码，等待手机确认登录')
+            if success_seen and not success_logged:
+                success_logged = True
+                _emit_log('已检测到手机确认，正在验证登录态')
+
+            now = time.time()
+            if success_seen or now - last_verify_time >= 5:
+                last_verify_time = now
+                login_ok, profile, verify_reason = _verify_login_context(ctx, allow_text_fallback=success_seen)
+                if not login_ok and success_seen:
+                    profile = profile or _collect_profile(ctx, page)
+                    login_ok = True
+                    verify_reason = '登录页已确认，保存当前浏览器会话'
+                if login_ok:
+                    _emit_log(f'登录态验证通过：{verify_reason}', 'success')
+                    break
+                if scan_seen and now - last_debug_time >= 10:
+                    last_debug_time = now
+                    profile = profile or _collect_profile(ctx, page)
+                    _emit_log(
+                        f'仍在等待登录态：{verify_reason}；当前 Cookie：{_format_cookie_names(profile)}',
+                        'warning',
+                    )
         except Exception:
             pass
         page.wait_for_timeout(1000)
@@ -413,7 +534,7 @@ def _do_login(p, session_file: Path):
 
     session_file.parent.mkdir(parents=True, exist_ok=True)
     ctx.storage_state(path=str(session_file))
-    profile = locals().get('profile') or _collect_profile(ctx)
+    profile = profile or _collect_profile(ctx)
     _save_profile(profile)
     browser.close()
 
@@ -429,12 +550,15 @@ def login_xianyu():
         _do_login(p, SESSION_FILE)
 
 
-def search_xianyu(keyword: str):
+def search_xianyu(keyword: str, category: str = ''):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
         _emit_log(f'商品最低价搜索：{keyword}')
-        prices, needs_login, links, priced_items = _run_search(p, keyword, SESSION_FILE)
+        rejected_terms = _get_rejected_terms(category)
+        if rejected_terms:
+            _emit_log(f'已启用过滤词：{category or "default"}（{len(rejected_terms)} 个）')
+        prices, needs_login, links, priced_items = _run_search(p, keyword, SESSION_FILE, category)
 
         if needs_login:
             _emit_log('未检测到有效登录态，已停止搜索', 'warning')
@@ -478,13 +602,18 @@ if __name__ == '__main__':
             _emit({'error': str(e)})
         sys.exit(0)
 
-    if len(sys.argv) < 2:
-        _emit({'error': '缺少关键词参数，用法: python xianyu_search.py <关键词>'})
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--category', default='')
+    parser.add_argument('keyword', nargs='*')
+    args = parser.parse_args()
+
+    if not args.keyword:
+        _emit({'error': '缺少关键词参数，用法: python xianyu_search.py [--category cpu] <关键词>'})
         sys.exit(1)
 
-    kw = ' '.join(sys.argv[1:])
+    kw = ' '.join(args.keyword)
     try:
-        price, url = search_xianyu(kw)
+        price, url = search_xianyu(kw, args.category)
         _emit({'xianyu': price, 'xianyu_url': url})
     except Exception as e:
         _emit({'error': str(e)})

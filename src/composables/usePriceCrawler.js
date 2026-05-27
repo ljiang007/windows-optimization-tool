@@ -52,7 +52,7 @@ export function usePriceCrawler(parts, options = {}) {
         if (!canCrawl) return
       }
       options.onLog?.(`开始搜索 ${part.label}：${part.model}`, 'info')
-      const result = await invoke('crawl_prices', { keyword: part.model })
+      const result = await invoke('crawl_prices', { keyword: part.model, category: part.key })
       part.xianyu = result.xianyu != null ? String(result.xianyu) : ''
       if (result.xianyu != null) {
         options.onLog?.(`最低价搜索完成：${part.model}，咸鱼 ¥${result.xianyu}`, 'success')

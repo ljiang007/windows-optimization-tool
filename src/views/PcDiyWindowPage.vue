@@ -250,6 +250,8 @@ async function openXianyuLogin() {
     return
   }
 
+  await invoke('clear_xianyu_qr').catch(() => {})
+
   const loginUrl = `${window.location.origin}/#/xianyu-login`
   xianyuLoginWindow = new WebviewWindow('xianyu-login', {
     url: loginUrl,

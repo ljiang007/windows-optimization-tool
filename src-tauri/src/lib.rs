@@ -631,24 +631,39 @@ fn find_python() -> Option<String> {
 
 fn extract_xianyu_script() -> Result<PathBuf, String> {
     static SCRIPT: &[u8] = include_bytes!("../resources/scripts/xianyu_search.py");
+    static FILTER_CONFIG: &[u8] = include_bytes!("../resources/scripts/xianyu_filter_keywords.json");
     let dir = std::env::temp_dir().join("system_toolbox_scripts");
     fs::create_dir_all(&dir).map_err(|e| format!("创建脚本目录失败：{e}"))?;
     let path = dir.join("xianyu_search.py");
+    let config_path = dir.join("xianyu_filter_keywords.json");
     let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("scripts")
         .join("xianyu_search.py");
+    let source_config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("scripts")
+        .join("xianyu_filter_keywords.json");
     let script_bytes = fs::read(&source_path).unwrap_or_else(|_| SCRIPT.to_vec());
+    let config_bytes = fs::read(&source_config_path).unwrap_or_else(|_| FILTER_CONFIG.to_vec());
     fs::write(&path, script_bytes).map_err(|e| format!("写出爬虫脚本失败：{e}"))?;
+    fs::write(&config_path, config_bytes).map_err(|e| format!("写出过滤词配置失败：{e}"))?;
     Ok(path)
 }
 
 async fn fetch_xianyu(
     _client: &reqwest::Client,
     keyword: &str,
+    category: Option<&str>,
     app: tauri::AppHandle,
 ) -> Result<XianyuFetchResult, String> {
-    run_xianyu_script(app, vec![keyword.to_string()], true).await
+    let mut args = Vec::new();
+    if let Some(category) = category.filter(|value| !value.trim().is_empty()) {
+        args.push("--category".to_string());
+        args.push(category.to_string());
+    }
+    args.push(keyword.to_string());
+    run_xianyu_script(app, args, true).await
 }
 
 async fn run_xianyu_script(
@@ -878,6 +893,13 @@ fn get_xianyu_qr(state: tauri::State<XianyuQrState>) -> Option<String> {
 }
 
 #[tauri::command]
+fn clear_xianyu_qr(state: tauri::State<XianyuQrState>) {
+    if let Ok(mut guard) = state.qr_b64.lock() {
+        *guard = None;
+    }
+}
+
+#[tauri::command]
 async fn start_xianyu_login(app: tauri::AppHandle) -> Result<(), String> {
     if let Ok(mut guard) = app.state::<XianyuQrState>().qr_b64.lock() {
         *guard = None;
@@ -887,7 +909,7 @@ async fn start_xianyu_login(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn crawl_prices(app: tauri::AppHandle, keyword: String) -> Result<PriceResult, String> {
+async fn crawl_prices(app: tauri::AppHandle, keyword: String, category: Option<String>) -> Result<PriceResult, String> {
     if keyword.trim().is_empty() {
         return Ok(PriceResult { taobao: None, douyin: None, xianyu: None, xianyu_url: None });
     }
@@ -895,7 +917,7 @@ async fn crawl_prices(app: tauri::AppHandle, keyword: String) -> Result<PriceRes
     let (tb, dy, xy) = tokio::join!(
         fetch_taobao(&client, &keyword),
         fetch_douyin(&client, &keyword),
-        fetch_xianyu(&client, &keyword, app),
+        fetch_xianyu(&client, &keyword, category.as_deref(), app),
     );
     let xy = xy?;
     Ok(PriceResult {
@@ -922,6 +944,7 @@ pub fn run() {
             crawl_prices,
             clear_xianyu_session,
             get_xianyu_qr,
+            clear_xianyu_qr,
             get_xianyu_session_info,
             start_xianyu_login,
         ])
