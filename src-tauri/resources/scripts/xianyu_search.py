@@ -64,6 +64,172 @@ def _parse_links_from_response(raw_json: str) -> list:
     return _unique(links)
 
 
+def _parse_items_from_search_response(raw_json: str) -> list:
+    raw = str(raw_json or '')
+    payload = _loads_json_like(raw)
+    results = []
+
+    text_keys = {
+        'title', 'desc', 'description', 'content', 'subTitle', 'itemStatusStr',
+        'text', 'valueText', 'propertyText', 'propertyName', 'valueName',
+        'name', 'model', 'brand', 'tag', 'feature', 'remark',
+    }
+
+    def collect_item_text(node, depth=0, bag=None):
+        if bag is None:
+            bag = []
+        if depth > 5:
+            return bag
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_text = str(key or '')
+                if isinstance(value, str) and value.strip():
+                    if key_text in text_keys and 'http' not in value:
+                        bag.append(value.strip())
+                elif isinstance(value, (dict, list)):
+                    collect_item_text(value, depth + 1, bag)
+        elif isinstance(node, list):
+            for value in node:
+                collect_item_text(value, depth + 1, bag)
+        return bag
+
+    def add_item(item_id: str = '', url: str = '', price=None, source: str = 'search', text: str = ''):
+        parsed_price = _extract_price_from_candidate(price)
+        if parsed_price is None:
+            return
+        normalized_url = _normalize_item_url(url)
+        if not normalized_url and item_id and re.fullmatch(r'\d{6,}', str(item_id)):
+            normalized_url = f'https://www.goofish.com/item?id={item_id}'
+        if not normalized_url:
+            return
+        results.append({
+            'url': normalized_url,
+            'price': parsed_price,
+            'price_source': source,
+            'text': str(text or '')[:2400],
+        })
+
+    def walk(node):
+        if isinstance(node, dict):
+            item_id = ''
+            for key in ('itemId', 'item_id', 'id', 'target_id'):
+                value = node.get(key)
+                if isinstance(value, (str, int, float)) and re.fullmatch(r'\d{6,}', str(value).strip()):
+                    item_id = str(value).strip()
+                    break
+
+            raw_url = ''
+            for key in (
+                'itemUrl', 'item_url', 'url', 'link', 'targetUrl', 'itemLinkUrl',
+                'jumpUrl', 'pcUrl', 'detailUrl', 'itemUrlPc',
+            ):
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    raw_url = value.strip()
+                    break
+            item_text = '\n'.join(_unique(collect_item_text(node)))
+
+            # 常见搜索结构：content.price = [{ text: "¥848" }]
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('soldPrice'),
+                source='search.soldPrice',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('price'),
+                source='search.price',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('currentPrice'),
+                source='search.currentPrice',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('priceText'),
+                source='search.priceText',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('showPrice'),
+                source='search.showPrice',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('itemPrice'),
+                source='search.itemPrice',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('minPrice'),
+                source='search.minPrice',
+                text=item_text,
+            )
+            add_item(
+                item_id=item_id,
+                url=raw_url,
+                price=node.get('maxPrice'),
+                source='search.maxPrice',
+                text=item_text,
+            )
+
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    if payload is not None:
+        walk(payload)
+
+    # 兜底：从文本中按 itemId 附近抓取 price/soldPrice
+    for match in re.finditer(r'"itemId"\s*:\s*"?(?P<id>\d{6,})"?', raw):
+        item_id = match.group('id')
+        start = max(0, match.start() - 1200)
+        end = min(len(raw), match.end() + 1200)
+        snippet = raw[start:end]
+        for pattern in (
+            r'"soldPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+            r'"currentPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+            r'"price"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+            r'"text"\s*:\s*"￥?(?P<price>\d+(?:\.\d+)?)"',
+        ):
+            m = re.search(pattern, snippet)
+            if not m:
+                continue
+            add_item(
+                item_id=item_id,
+                url='',
+                price=m.group('price'),
+                source='search.raw_snippet',
+                text=snippet,
+            )
+            break
+
+    unique_items = _unique_items(results)
+    text_by_url = {}
+    for item in results:
+        if item.get('url') and item.get('text'):
+            text_by_url[item['url']] = item.get('text')
+    for item in unique_items:
+        item['text'] = text_by_url.get(item.get('url'), '')
+    return unique_items
+
+
 def _extract_item_id(value: str) -> str:
     if not value:
         return ''
@@ -116,6 +282,13 @@ def _loads_json_like(raw_json):
     text = str(raw_json or '').strip()
     if not text:
         return None
+
+    # 部分接口会在 JSON 前附加防劫持前缀。
+    for prefix in ('for(;;);', 'for (;;);', 'while(1);', 'while (1);'):
+        if text.startswith(prefix):
+            text = text[len(prefix):].lstrip()
+            break
+
     try:
         return json.loads(text)
     except Exception:
@@ -128,6 +301,71 @@ def _loads_json_like(raw_json):
         return json.loads(match.group(1))
     except Exception:
         return None
+
+
+def _extract_price_from_candidate(value):
+    if isinstance(value, dict):
+        for key in ('soldPrice', 'price', 'currentPrice', 'value', 'text'):
+            if key in value:
+                price = _extract_price_from_candidate(value.get(key))
+                if price is not None:
+                    return price
+        return None
+    if isinstance(value, list):
+        for item in value:
+            price = _extract_price_from_candidate(item)
+            if price is not None:
+                return price
+        return None
+    return _parse_price(value)
+
+
+def _extract_price_from_raw(raw_json: str):
+    raw = str(raw_json or '')
+    patterns = [
+        r'"soldPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'"currentPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'"price"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'\\"soldPrice\\"\s*:\s*\\"(?P<price>\d+(?:\.\d+)?)\\"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if not match:
+            continue
+        price = _parse_price(match.group('price'))
+        if price is not None:
+            return price
+    return None
+
+
+def _extract_price_from_page_html(html: str, item_id: str = ''):
+    raw = str(html or '')
+    if not raw:
+        return None
+
+    patterns = []
+    if item_id:
+        safe_id = re.escape(str(item_id))
+        patterns.extend([
+            rf'"itemId"\s*:\s*"?{safe_id}"?[\s\S]{{0,6000}}?"soldPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+            rf'"soldPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?[\s\S]{{0,6000}}?"itemId"\s*:\s*"?{safe_id}"?',
+        ])
+
+    patterns.extend([
+        r'"soldPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'"currentPrice"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'"price"\s*:\s*"?(?P<price>\d+(?:\.\d+)?)"?',
+        r'￥\s*(?P<price>\d+(?:\.\d+)?)',
+    ])
+
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if not match:
+            continue
+        price = _parse_price(match.group('price'))
+        if price is not None:
+            return price
+    return None
 
 
 def _parse_price(value):
@@ -168,16 +406,51 @@ def _unique(values: list) -> list:
 
 
 def _unique_items(items: list) -> list:
-    seen = set()
-    results = []
+    by_url = {}
     for item in items:
         url = item.get('url')
         price = _parse_price(item.get('price'))
-        if not url or price is None or url in seen:
+        if not url or price is None:
             continue
-        seen.add(url)
-        results.append({'url': url, 'price': price})
-    return results
+        if url not in by_url:
+            normalized = dict(item)
+            normalized['url'] = url
+            normalized['price'] = price
+            by_url[url] = normalized
+            continue
+
+        current = by_url[url]
+        current_price = _parse_price(current.get('price'))
+        if current_price is None or price < current_price:
+            merged = dict(current)
+            merged.update(item)
+            merged['url'] = url
+            merged['price'] = price
+            # 优先保留已有的完整文本，避免新条目覆盖成空文本。
+            if current.get('text') and not merged.get('text'):
+                merged['text'] = current.get('text')
+            by_url[url] = merged
+        else:
+            # 价格更高时，补齐可能缺失的元信息（text / price_source）。
+            if not current.get('text') and item.get('text'):
+                current['text'] = item.get('text')
+            if not current.get('price_source') and item.get('price_source'):
+                current['price_source'] = item.get('price_source')
+
+    return list(by_url.values())
+
+
+def _price_source_label(source: str) -> str:
+    value = str(source or '').strip()
+    if not value:
+        return '未知来源'
+    if value.startswith('search.'):
+        return '搜索接口'
+    if value == 'page_html_fallback':
+        return '页面兜底'
+    if value == 'raw_text_fallback':
+        return '原文兜底'
+    return '详情接口'
 
 
 def _sort_items_by_price(items: list) -> list:
@@ -272,14 +545,46 @@ def _collect_rich_text(raw_value) -> str:
 def _parse_detail_response(raw_json: str, item_url: str = '') -> dict:
     payload = _loads_json_like(raw_json)
     if not isinstance(payload, dict):
-        return None
+        fallback_price = _extract_price_from_raw(raw_json)
+        if fallback_price is None:
+            return None
+        return {
+            'url': _normalize_item_url(item_url),
+            'price': fallback_price,
+            'price_source': 'raw_text_fallback',
+            'item_id': _extract_item_id(item_url),
+            'title': '',
+            'text': '',
+        }
 
     data = payload.get('data') or {}
+    if isinstance(data, str):
+        data = _loads_json_like(data) or {}
     if not isinstance(data, dict):
-        return None
+        fallback_price = _extract_price_from_raw(raw_json)
+        if fallback_price is None:
+            return None
+        return {
+            'url': _normalize_item_url(item_url),
+            'price': fallback_price,
+            'price_source': 'raw_text_fallback',
+            'item_id': _extract_item_id(item_url),
+            'title': '',
+            'text': '',
+        }
     item = data.get('itemDO') or {}
     if not isinstance(item, dict) or not item:
-        return None
+        fallback_price = _extract_price_from_raw(raw_json)
+        if fallback_price is None:
+            return None
+        return {
+            'url': _normalize_item_url(item_url),
+            'price': fallback_price,
+            'price_source': 'raw_text_fallback',
+            'item_id': _extract_item_id(item_url),
+            'title': '',
+            'text': '',
+        }
 
     share_info = _parse_share_info(item)
     content_params = share_info.get('contentParams') or {}
@@ -301,13 +606,17 @@ def _parse_detail_response(raw_json: str, item_url: str = '') -> dict:
     price = None
     price_source = ''
     for source, value in price_candidates:
-        price = _parse_price(value)
+        price = _extract_price_from_candidate(value)
         if price is not None:
             price_source = source
             break
 
     if price is None:
-        return None
+        fallback_price = _extract_price_from_raw(raw_json)
+        if fallback_price is None:
+            return None
+        price = fallback_price
+        price_source = 'raw_text_fallback'
 
     track_params = data.get('trackParams') or item.get('trackParams') or {}
     if not isinstance(track_params, dict):
@@ -356,11 +665,19 @@ def _read_detail_item_from_api(ctx, url: str, keyword: str, rejected_terms: list
         page = ctx.new_page()
         page.add_init_script(STEALTH)
 
+        response_debug = []
+
         def on_detail_response(resp):
             if resp.status != 200 or DETAIL_API_MARKER not in resp.url:
                 return
             try:
-                api_payloads.append(resp.text())
+                raw_text = resp.text()
+                api_payloads.append(raw_text)
+                response_debug.append({
+                    'url': resp.url,
+                    'content_type': (resp.header_value('content-type') or '').lower(),
+                    'size': len(raw_text or ''),
+                })
             except Exception:
                 pass
 
@@ -371,21 +688,75 @@ def _read_detail_item_from_api(ctx, url: str, keyword: str, rejected_terms: list
             _emit_log(f'详情页打开超时，继续等待详情接口：{detail_url}', 'warning', url=detail_url)
 
         deadline = time.time() + 12
-        while time.time() < deadline and not api_payloads:
-            page.wait_for_timeout(500)
+        first_payload_at = None
+        while time.time() < deadline:
+            if api_payloads and first_payload_at is None:
+                first_payload_at = time.time()
+            # 第一条命中后再等一小段时间，避免只拿到预请求/空壳响应。
+            if first_payload_at and (time.time() - first_payload_at) >= 2.5:
+                break
+            page.wait_for_timeout(300)
 
         parsed_items = []
+        parse_failed = 0
+        id_mismatch = 0
+        validate_hits = 0
         for raw in api_payloads:
+            if 'FAIL_SYS_USER_VALIDATE' in str(raw):
+                validate_hits += 1
             item = _parse_detail_response(raw, detail_url)
             if not item:
+                parse_failed += 1
                 continue
             actual_item_id = item.get('item_id')
             if expected_item_id and actual_item_id and expected_item_id != actual_item_id:
+                id_mismatch += 1
                 continue
             parsed_items.append(item)
 
         if not parsed_items:
-            _emit_log(f'未从详情接口拿到价格，跳过：{detail_url}', 'warning', url=detail_url)
+            if validate_hits > 0:
+                _emit_log(
+                    f'详情接口触发风控（FAIL_SYS_USER_VALIDATE），本次跳过详情接口：{detail_url}',
+                    'warning',
+                    url=detail_url,
+                )
+                return {'blocked': True, 'url': detail_url}
+
+            try:
+                html = page.content()
+            except Exception:
+                html = ''
+            html_price = _extract_price_from_page_html(html, expected_item_id)
+            if html_price is not None:
+                try:
+                    detail_text = page.inner_text('body', timeout=2000)
+                except Exception:
+                    detail_text = ''
+                if detail_text and not _text_matches_keyword(detail_text, keyword):
+                    _emit_log(f'页面兜底命中价格但关键词不匹配，跳过：{detail_url}', 'warning', url=detail_url)
+                    return None
+                rejected_term = _find_rejected_term(detail_text, rejected_terms)
+                if rejected_term:
+                    _emit_log(f'页面兜底命中价格但命中过滤词「{rejected_term}」，跳过：{detail_url}', 'warning', url=detail_url)
+                    return None
+                _emit_log(
+                    f'详情接口解析失败，已使用页面兜底价格：￥{_format_price(html_price)}，链接：{detail_url}',
+                    'warning',
+                    url=detail_url,
+                )
+                return {'url': detail_url, 'price': html_price, 'price_source': 'page_html_fallback', 'text': detail_text}
+
+            sample = response_debug[0] if response_debug else {}
+            sample_info = f'示例响应 size={sample.get("size", 0)} content-type={sample.get("content_type", "--")}'
+            sample_preview = ''
+            if api_payloads:
+                sample_preview = re.sub(r'\s+', ' ', str(api_payloads[0])[:160])
+            _emit_log(
+                f'未从详情接口拿到价格，跳过：{detail_url}（命中响应{len(api_payloads)}条，解析失败{parse_failed}条，ID不匹配{id_mismatch}条，{sample_info}，预览：{sample_preview}）',
+                'warning',
+                url=detail_url,
+            )
             return None
 
         item = parsed_items[0]
@@ -447,6 +818,7 @@ def _run_search(p, keyword: str, session_file: Path, category: str = ''):
     """headless 搜索，返回 (价格列表, 是否需要登录, 商品链接列表, 带价格商品列表)"""
     item_links = []
     priced_items = []
+    search_priced_items = []
     rejected_terms = _get_rejected_terms(category)
 
     browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
@@ -464,6 +836,7 @@ def _run_search(p, keyword: str, session_file: Path, category: str = ''):
         try:
             raw = resp.text()
             item_links.extend(_parse_links_from_response(raw))
+            search_priced_items.extend(_parse_items_from_search_response(raw))
         except Exception:
             pass
 
@@ -500,15 +873,61 @@ def _run_search(p, keyword: str, session_file: Path, category: str = ''):
 
     normalized_links = [_normalize_item_url(link) for link in item_links]
     candidate_links = _unique(link for link in normalized_links if link)
+    detail_blocked = False
     for link in candidate_links[:MAX_DETAIL_CANDIDATES]:
         item = _read_detail_item_from_api(ctx, link, keyword, rejected_terms)
+        if item and item.get('blocked'):
+            detail_blocked = True
+            break
         if item:
             priced_items.append(item)
+        page.wait_for_timeout(220)
 
     browser.close()
 
+    search_priced_items = _unique_items(search_priced_items)
+    if candidate_links:
+        candidate_set = set(candidate_links)
+        search_priced_items = [item for item in search_priced_items if item.get('url') in candidate_set]
+    filtered_search_items = []
+    search_rejected_hits = 0
+    search_keyword_miss = 0
+    search_text_missing = 0
+    for item in search_priced_items:
+        search_text = str(item.get('text') or '')
+        if not search_text:
+            search_text_missing += 1
+            continue
+        if search_text and not _text_matches_keyword(search_text, keyword):
+            search_keyword_miss += 1
+            continue
+        rejected_term = _find_rejected_term(search_text, rejected_terms) if search_text else ''
+        if rejected_term:
+            search_rejected_hits += 1
+            _emit_log(
+                f'搜索接口候选已过滤：命中过滤词「{rejected_term}」，链接：{item.get("url")}',
+                'warning',
+                url=item.get('url'),
+            )
+            continue
+        filtered_search_items.append(item)
+    search_priced_items = filtered_search_items
+    if search_priced_items:
+        _emit_log(
+            f'搜索接口提取到候选价格 {len(search_priced_items)} 条（详情接口风控时自动兜底）',
+            'info',
+        )
+    if search_rejected_hits or search_keyword_miss or search_text_missing:
+        _emit_log(
+            f'搜索接口候选过滤完成：过滤词拦截{search_rejected_hits}条，关键词不匹配{search_keyword_miss}条，缺少文本{search_text_missing}条',
+            'info',
+        )
+    if detail_blocked:
+        _emit_log('详情接口已被风控，已切换为搜索接口价格兜底', 'warning')
+
+    merged_priced_items = _unique_items(priced_items + search_priced_items)
     needs_login = not candidate_links and not priced_items and _text_needs_login(body)
-    return [], needs_login, candidate_links, _unique_items(priced_items)
+    return [], needs_login, candidate_links, merged_priced_items
 
 
 def _collect_profile(ctx, page=None) -> dict:
@@ -632,9 +1051,25 @@ def _save_profile(profile: dict):
     )
 
 
+def _capture_login_qr_b64(page):
+    import base64
+
+    # 优先截取二维码 canvas；失败再退化为页面截图。
+    try:
+        el = page.query_selector('#qrcode-img canvas')
+        if el:
+            return base64.b64encode(el.screenshot()).decode()
+    except Exception:
+        pass
+
+    try:
+        return base64.b64encode(page.screenshot(full_page=False)).decode()
+    except Exception:
+        return ''
+
+
 def _do_login(p, session_file: Path):
     """直接打开 passport.goofish.com 登录页（qrCodeFirst=true），提取 QR canvas，等待扫码跳转"""
-    import base64
 
     LOGIN_URL = (
         'https://passport.goofish.com/mini_login.htm'
@@ -689,23 +1124,12 @@ def _do_login(p, session_file: Path):
     except Exception:
         _emit_log('等待二维码 canvas 尺寸超时，准备尝试截图', 'warning')
 
-    # 提取 QR canvas：优先元素截图，避免 canvas 因跨域 logo 被污染导致 toDataURL 失败
-    qr_b64 = ''
-    try:
-        el = page.query_selector('#qrcode-img canvas')
-        if el:
-            qr_b64 = base64.b64encode(el.screenshot()).decode()
-            _emit_log('二维码 canvas 截图成功')
-    except Exception:
-        _emit_log('二维码 canvas 截图失败，准备页面截图兜底', 'warning')
-
-    # 兜底：截取页面截图
-    if not qr_b64:
-        try:
-            qr_b64 = base64.b64encode(page.screenshot(full_page=False)).decode()
-            _emit_log('登录页截图兜底成功')
-        except Exception:
-            _emit_log('登录页截图兜底失败', 'error')
+    # 提取登录二维码截图（后续在等待环节也会持续刷新，避免二维码过期导致扫码失败）。
+    qr_b64 = _capture_login_qr_b64(page)
+    if qr_b64:
+        _emit_log('登录二维码截图已就绪')
+    else:
+        _emit_log('登录页截图兜底失败', 'error')
 
     if not qr_b64:
         browser.close()
@@ -721,11 +1145,23 @@ def _do_login(p, session_file: Path):
     profile = {}
     last_verify_time = 0
     last_debug_time = 0
+    last_qr_push_time = 0
     scan_logged = False
     success_logged = False
+    login_fail_reason = ''
     deadline = time.time() + 180
     while time.time() < deadline:
+        now = time.time()
         try:
+            if page.is_closed():
+                login_ok, profile, verify_reason = _verify_login_context(ctx, allow_text_fallback=True)
+                if login_ok:
+                    _emit_log(f'登录页已关闭，但登录态验证通过：{verify_reason}', 'success')
+                else:
+                    _emit_log(f'登录页已关闭，登录态未就绪：{verify_reason}', 'warning')
+                    login_fail_reason = verify_reason or '登录页已关闭'
+                break
+
             _body_text, scan_seen, success_seen, _frame_urls = _read_login_page_signals(page)
             if scan_seen and not scan_logged:
                 scan_logged = True
@@ -734,7 +1170,13 @@ def _do_login(p, session_file: Path):
                 success_logged = True
                 _emit_log('已检测到手机确认，正在验证登录态')
 
-            now = time.time()
+            if not scan_seen and not success_seen and now - last_qr_push_time >= 12:
+                refreshed_qr = _capture_login_qr_b64(page)
+                if refreshed_qr:
+                    _emit({'status': 'qr_ready', 'qr_b64': refreshed_qr})
+                    last_qr_push_time = now
+                    _emit_log('二维码已刷新')
+
             if success_seen or now - last_verify_time >= 5:
                 last_verify_time = now
                 login_ok, profile, verify_reason = _verify_login_context(ctx, allow_text_fallback=success_seen)
@@ -752,13 +1194,34 @@ def _do_login(p, session_file: Path):
                         f'仍在等待登录态：{verify_reason}；当前 Cookie：{_format_cookie_names(profile)}',
                         'warning',
                     )
-        except Exception:
-            pass
-        page.wait_for_timeout(1000)
+        except Exception as exc:
+            if 'has been closed' in str(exc):
+                login_ok, profile, verify_reason = _verify_login_context(ctx, allow_text_fallback=True)
+                if login_ok:
+                    _emit_log(f'登录页意外关闭，但登录态验证通过：{verify_reason}', 'success')
+                else:
+                    _emit_log(f'登录页意外关闭：{verify_reason}', 'warning')
+                    login_fail_reason = verify_reason or '登录页意外关闭'
+                break
+
+        try:
+            page.wait_for_timeout(1000)
+        except Exception as exc:
+            if 'has been closed' in str(exc):
+                login_ok, profile, verify_reason = _verify_login_context(ctx, allow_text_fallback=True)
+                if login_ok:
+                    _emit_log(f'等待阶段页面已关闭，但登录态验证通过：{verify_reason}', 'success')
+                else:
+                    _emit_log(f'等待阶段页面已关闭：{verify_reason}', 'warning')
+                    login_fail_reason = verify_reason or '等待阶段页面已关闭'
+                break
 
     if not login_ok:
         browser.close()
-        _emit({'error': '咸鱼扫码登录超时，请重试'})
+        error_text = '咸鱼扫码登录超时，请重试'
+        if login_fail_reason:
+            error_text = f'咸鱼登录失败：{login_fail_reason}'
+        _emit({'error': error_text})
         return
 
     session_file.parent.mkdir(parents=True, exist_ok=True)
@@ -797,8 +1260,9 @@ def search_xianyu(keyword: str, category: str = ''):
     priced_items = _sort_items_by_price(priced_items)[:8]
 
     for item in priced_items:
+        source = item.get('price_source')
         _emit_log(
-            f'搜到商品链接（详情接口￥{_format_price(item.get("price"))}）：{item.get("url")}',
+            f'搜到商品链接（{_price_source_label(source)}￥{_format_price(item.get("price"))}）：{item.get("url")}',
             'link',
             url=item.get('url'),
         )
@@ -809,8 +1273,9 @@ def search_xianyu(keyword: str, category: str = ''):
 
     if priced_items:
         best = priced_items[0]
+        best_source = best.get('price_source')
         _emit_log(
-            f'最终采用详情接口最低价：￥{_format_price(best["price"])}，链接：{best["url"]}',
+            f'最终采用{_price_source_label(best_source)}最低价：￥{_format_price(best["price"])}，链接：{best["url"]}',
             'success',
             url=best['url'],
         )
