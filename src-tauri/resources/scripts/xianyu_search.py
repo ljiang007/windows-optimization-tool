@@ -37,6 +37,7 @@ LOGIN_PROMPTS = ('立即登录', '扫码登录', '手机扫码登录', '登录/�
 LOGIN_SCAN_TEXTS = ('扫码成功', '扫描成功', '已扫码', '请在手机上确认', '手机确认', '确认登录')
 LOGIN_SUCCESS_TEXTS = ('登录成功', '授权成功', '已确认', '确认成功', '登录完成')
 DETAIL_API_MARKER = 'mtop.taobao.idle.pc.detail'
+USER_NAV_API_MARKER = 'mtop.idle.web.user.page.nav'
 MAX_DETAIL_CANDIDATES = 10
 NEGATION_PREFIXES = ('无', '沒', '没', '沒有', '没有', '并无', '並無', '并非', '並非', '不是', '非', '未', '未见', '未發現', '未发现')
 
@@ -961,8 +962,15 @@ def _collect_profile(ctx, page=None) -> dict:
         except Exception:
             storage = {}
 
+    display_name = ''
+    for key in ('tracknick', '_nk_', 'lgc', 'sn', 'unb'):
+        value = str(candidates.get(key) or '').strip()
+        if value:
+            display_name = value
+            break
+
     return {
-        'display_name': '已登录',
+        'display_name': display_name or '已登录',
         'candidate_cookies': candidates,
         'cookie_names': sorted({cookie.get('name') for cookie in cookies if cookie.get('name')}),
         'storage': storage,
@@ -1008,10 +1016,69 @@ def _read_login_page_signals(page) -> tuple:
     return body_text, scan_seen, success_seen, frame_urls
 
 
+def _extract_display_name_from_nav_payload(raw_json: str) -> str:
+    payload = _loads_json_like(raw_json)
+    if not isinstance(payload, dict):
+        return ''
+    data = payload.get('data') or {}
+    if not isinstance(data, dict):
+        return ''
+    module = data.get('module') or {}
+    if not isinstance(module, dict):
+        return ''
+    base = module.get('base') or {}
+    if not isinstance(base, dict):
+        return ''
+    return str(base.get('displayName') or '').strip()
+
+
+def _fetch_display_name_from_nav_api(ctx) -> str:
+    page = None
+    payloads = []
+    try:
+        page = ctx.new_page()
+        page.add_init_script(STEALTH)
+
+        def on_nav_response(resp):
+            if resp.status != 200 or USER_NAV_API_MARKER not in resp.url:
+                return
+            try:
+                payloads.append(resp.text())
+            except Exception:
+                pass
+
+        page.on('response', on_nav_response)
+        try:
+            page.goto('https://www.goofish.com/', wait_until='domcontentloaded', timeout=15000)
+        except Exception:
+            pass
+
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            for raw in payloads:
+                display_name = _extract_display_name_from_nav_payload(raw)
+                if display_name:
+                    return display_name
+            page.wait_for_timeout(300)
+    except Exception:
+        return ''
+    finally:
+        if page:
+            try:
+                page.close()
+            except Exception:
+                pass
+    return ''
+
+
 def _verify_login_context(ctx, allow_text_fallback: bool = False) -> tuple:
     """校验扫码后的同一浏览器上下文是否已经拿到登录态。"""
     profile = _collect_profile(ctx)
     if _has_login_cookie(profile):
+        display_name = _fetch_display_name_from_nav_api(ctx)
+        if display_name:
+            profile['display_name'] = display_name
+            return True, profile, '检测到登录 Cookie，已获取 displayName'
         return True, profile, '检测到登录 Cookie'
 
     verify_page = None
@@ -1227,6 +1294,10 @@ def _do_login(p, session_file: Path):
     session_file.parent.mkdir(parents=True, exist_ok=True)
     ctx.storage_state(path=str(session_file))
     profile = profile or _collect_profile(ctx)
+    display_name = _fetch_display_name_from_nav_api(ctx)
+    if display_name:
+        profile['display_name'] = display_name
+        _emit_log(f'已通过用户导航接口获取 displayName：{display_name}', 'info')
     _save_profile(profile)
     browser.close()
 

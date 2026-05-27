@@ -848,6 +848,16 @@ fn clear_xianyu_session() -> Result<String, String> {
 }
 
 fn format_xianyu_username(profile: Option<&serde_json::Value>) -> String {
+    let display_name = profile
+        .and_then(|json| json.get("display_name"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "已登录");
+
+    if let Some(name) = display_name {
+        return format!("已登录/{name}");
+    }
+
     let nick = profile
         .and_then(|json| json.get("candidate_cookies"))
         .and_then(|cookies| cookies.as_object())
